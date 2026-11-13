@@ -22,7 +22,7 @@ ALTER TABLE public.branches
 
 -- 2. Clinic Services Catalogue (Org-wide or Branch-specific)
 CREATE TABLE IF NOT EXISTS public.clinic_services (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
   branch_id UUID,
   name VARCHAR(150) NOT NULL,

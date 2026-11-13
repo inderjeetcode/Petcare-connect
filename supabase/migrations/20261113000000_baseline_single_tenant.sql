@@ -13,7 +13,7 @@
 --    only after Phase 0 read-only schema verification. Safe on fresh local DB.
 -- ==============================================================================
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Uses PostgreSQL 13+ built-in gen_random_uuid() (no uuid-ossp extension required).
 
 DO $$ BEGIN
   CREATE TYPE public.user_role_enum AS ENUM ('client', 'doctor', 'admin');
@@ -41,7 +41,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- 1. PROFILES
 CREATE TABLE IF NOT EXISTS public.profiles (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     full_name VARCHAR(150) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     phone VARCHAR(30),
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 
 -- 2. USER_ROLES
 CREATE TABLE IF NOT EXISTS public.user_roles (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     role public.user_role_enum NOT NULL DEFAULT 'client',
     created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS public.user_roles (
 
 -- 3. PETS
 CREATE TABLE IF NOT EXISTS public.pets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     species VARCHAR(50) NOT NULL,
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS public.pets (
 
 -- 4. DOCTOR_PROFILES
 CREATE TABLE IF NOT EXISTS public.doctor_profiles (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
     qualification VARCHAR(255) NOT NULL,
     specialization VARCHAR(150) NOT NULL,
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS public.doctor_profiles (
 
 -- 5. DOCTOR_AVAILABILITY
 CREATE TABLE IF NOT EXISTS public.doctor_availability (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     doctor_id UUID NOT NULL REFERENCES public.doctor_profiles(id) ON DELETE CASCADE,
     day_of_week VARCHAR(15) NOT NULL,
     start_time TIME NOT NULL,
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS public.doctor_availability (
 
 -- 6. CONSULTATIONS
 CREATE TABLE IF NOT EXISTS public.consultations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     client_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
     doctor_id UUID NOT NULL REFERENCES public.doctor_profiles(id) ON DELETE RESTRICT,
     pet_id UUID NOT NULL REFERENCES public.pets(id) ON DELETE RESTRICT,
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS public.consultations (
 
 -- 7. CONSULTATION_PAYMENTS
 CREATE TABLE IF NOT EXISTS public.consultation_payments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     consultation_id UUID NOT NULL REFERENCES public.consultations(id) ON DELETE CASCADE,
     amount NUMERIC(8, 2) NOT NULL CHECK (amount >= 0),
     payment_status public.payment_status_enum NOT NULL DEFAULT 'pending',
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS public.consultation_payments (
 
 -- 8. CHAT_CONVERSATIONS
 CREATE TABLE IF NOT EXISTS public.chat_conversations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     consultation_id UUID NOT NULL UNIQUE REFERENCES public.consultations(id) ON DELETE CASCADE,
     client_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     doctor_id UUID NOT NULL REFERENCES public.doctor_profiles(id) ON DELETE CASCADE,
@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS public.chat_conversations (
 
 -- 9. CHAT_MESSAGES
 CREATE TABLE IF NOT EXISTS public.chat_messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id UUID NOT NULL REFERENCES public.chat_conversations(id) ON DELETE CASCADE,
     sender_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
     message_type public.message_type_enum NOT NULL DEFAULT 'text',
@@ -158,7 +158,7 @@ CREATE TABLE IF NOT EXISTS public.chat_messages (
 
 -- 10. PRESCRIPTIONS
 CREATE TABLE IF NOT EXISTS public.prescriptions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     consultation_id UUID NOT NULL REFERENCES public.consultations(id) ON DELETE RESTRICT,
     pet_id UUID NOT NULL REFERENCES public.pets(id) ON DELETE RESTRICT,
     doctor_id UUID NOT NULL REFERENCES public.doctor_profiles(id) ON DELETE RESTRICT,
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS public.prescriptions (
 
 -- 11. PRESCRIPTION_ITEMS
 CREATE TABLE IF NOT EXISTS public.prescription_items (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     prescription_id UUID NOT NULL REFERENCES public.prescriptions(id) ON DELETE CASCADE,
     medicine_name VARCHAR(150) NOT NULL,
     dosage VARCHAR(100) NOT NULL,
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS public.prescription_items (
 
 -- 12. MEDICAL_RECORDS
 CREATE TABLE IF NOT EXISTS public.medical_records (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pet_id UUID NOT NULL REFERENCES public.pets(id) ON DELETE CASCADE,
     consultation_id UUID REFERENCES public.consultations(id) ON DELETE SET NULL,
     doctor_id UUID REFERENCES public.doctor_profiles(id) ON DELETE SET NULL,
@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS public.medical_records (
 
 -- 13. VACCINATIONS
 CREATE TABLE IF NOT EXISTS public.vaccinations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pet_id UUID NOT NULL REFERENCES public.pets(id) ON DELETE CASCADE,
     vaccine_name VARCHAR(150) NOT NULL,
     administered_date DATE NOT NULL,
@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS public.vaccinations (
 
 -- 14. NOTIFICATIONS
 CREATE TABLE IF NOT EXISTS public.notifications (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     title VARCHAR(150) NOT NULL,
     message TEXT NOT NULL,
@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 
 -- 15. REVIEWS
 CREATE TABLE IF NOT EXISTS public.reviews (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     consultation_id UUID NOT NULL UNIQUE REFERENCES public.consultations(id) ON DELETE CASCADE,
     client_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     doctor_id UUID NOT NULL REFERENCES public.doctor_profiles(id) ON DELETE CASCADE,
@@ -230,7 +230,7 @@ CREATE TABLE IF NOT EXISTS public.reviews (
 
 -- 16. AUDIT_LOGS
 CREATE TABLE IF NOT EXISTS public.audit_logs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     action VARCHAR(100) NOT NULL,
     entity_type VARCHAR(100) NOT NULL,

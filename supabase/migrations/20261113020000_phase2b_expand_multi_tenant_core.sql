@@ -17,7 +17,7 @@ REVOKE ALL ON SCHEMA app FROM PUBLIC, anon, authenticated;
 GRANT USAGE ON SCHEMA app TO authenticated;
 
 CREATE TABLE IF NOT EXISTS app.migration_runs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     migration_name TEXT NOT NULL,
     phase TEXT NOT NULL,
     started_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS public.platform_admins (
 
 -- 3. Organizations (Tenancy Root)
 CREATE TABLE IF NOT EXISTS public.organizations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     slug VARCHAR(80) NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9][a-z0-9-]{1,78}[a-z0-9]$'),
     legal_name VARCHAR(200) NOT NULL,
     display_name VARCHAR(150) NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS public.organizations (
 
 -- 4. Organization Applications (Clinic Self-Registration Queue)
 CREATE TABLE IF NOT EXISTS public.organization_applications (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     applicant_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
     proposed_name VARCHAR(150) NOT NULL,
     proposed_slug VARCHAR(80) NOT NULL CHECK (proposed_slug ~ '^[a-z0-9][a-z0-9-]{1,78}[a-z0-9]$'),
@@ -88,7 +88,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_org_app_pending_slug
 
 -- 5. Branches (Multi-Branch Support per Organization)
 CREATE TABLE IF NOT EXISTS public.branches (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     name VARCHAR(150) NOT NULL,
     code VARCHAR(40) NOT NULL,
@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS public.branches (
 
 -- 6. Organization Roles & Static Permission Catalogue
 CREATE TABLE IF NOT EXISTS public.organization_roles (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
     code VARCHAR(50) NOT NULL,
     display_name VARCHAR(100) NOT NULL,
@@ -198,7 +198,7 @@ ON CONFLICT (role_id, permission_code) DO NOTHING;
 
 -- 7. Organization Memberships, Membership Roles, Branch Scope & Staff Invitations
 CREATE TABLE IF NOT EXISTS public.organization_memberships (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
     status VARCHAR(20) NOT NULL DEFAULT 'active'
@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS public.membership_branches (
 );
 
 CREATE TABLE IF NOT EXISTS public.staff_invitations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
     email VARCHAR(255) NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
@@ -256,7 +256,7 @@ CREATE TABLE IF NOT EXISTS public.staff_invitations (
 
 -- 8. Clinic-Scoped Client Directory & Pet Guardianship
 CREATE TABLE IF NOT EXISTS public.clinic_clients (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     full_name VARCHAR(150) NOT NULL,
@@ -281,7 +281,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_clients_org_user
   WHERE user_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS public.pet_guardians (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     pet_id UUID NOT NULL,
     clinic_client_id UUID NOT NULL,
@@ -297,7 +297,7 @@ CREATE TABLE IF NOT EXISTS public.pet_guardians (
 
 -- 9. Multi-Branch Doctor Assignments & Branch-Specific Schedules
 CREATE TABLE IF NOT EXISTS public.doctor_branch_assignments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     doctor_profile_id UUID NOT NULL,
     branch_id UUID NOT NULL,
@@ -316,7 +316,7 @@ CREATE TABLE IF NOT EXISTS public.doctor_branch_assignments (
 );
 
 CREATE TABLE IF NOT EXISTS public.doctor_schedules (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     branch_id UUID NOT NULL,
     doctor_profile_id UUID NOT NULL,
@@ -337,7 +337,7 @@ CREATE TABLE IF NOT EXISTS public.doctor_schedules (
 );
 
 CREATE TABLE IF NOT EXISTS public.doctor_schedule_exceptions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     branch_id UUID,
     doctor_profile_id UUID NOT NULL,
@@ -355,7 +355,7 @@ CREATE TABLE IF NOT EXISTS public.doctor_schedule_exceptions (
 
 -- 10. Concurrency-Safe Appointments & Append-Only Status History
 CREATE TABLE IF NOT EXISTS public.appointments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     branch_id UUID NOT NULL,
     clinic_client_id UUID NOT NULL,
@@ -394,7 +394,7 @@ CREATE TABLE IF NOT EXISTS public.appointments (
 );
 
 CREATE TABLE IF NOT EXISTS public.appointment_status_history (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     appointment_id UUID NOT NULL,
     from_status VARCHAR(20),
@@ -409,7 +409,7 @@ CREATE TABLE IF NOT EXISTS public.appointment_status_history (
 
 -- 11. Private File Attachments Metadata
 CREATE TABLE IF NOT EXISTS public.attachments (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
     entity_type VARCHAR(40) NOT NULL CHECK (entity_type IN ('pet', 'medical_record', 'consultation', 'chat_message', 'application')),
     entity_id UUID NOT NULL,

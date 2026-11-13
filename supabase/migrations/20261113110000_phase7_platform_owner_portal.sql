@@ -211,7 +211,7 @@ CREATE TRIGGER platform_settings_touch_updated_at
 -- 3. Explicit, Time-Limited, Audited Support Access Grants
 --    (Scoped strictly to non-clinical operational diagnostics; NEVER raw chat or PHI)
 CREATE TABLE IF NOT EXISTS public.platform_support_access_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE RESTRICT,
   platform_admin_user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
   requested_by UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
