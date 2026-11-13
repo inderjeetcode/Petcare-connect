@@ -529,14 +529,19 @@ export const AdminDoctors: React.FC = () => {
                 </div>
                 {branches.length === 0 ? (
                   <span className="text-xs text-slate-500">
-                    No branches available.{' '}
-                    <button
-                      type="button"
-                      onClick={() => navigate(`${adminBasePath}/branches`)}
-                      className="text-teal-700 underline font-semibold"
-                    >
-                      Configure branches
-                    </button>
+                    No branches available.
+                    {(workspace.canManageBranches || workspace.canManageSchedules) && (
+                      <>
+                        {' '}
+                        <button
+                          type="button"
+                          onClick={() => navigate(`${adminBasePath}/branches`)}
+                          className="text-teal-700 underline font-semibold"
+                        >
+                          Configure branches
+                        </button>
+                      </>
+                    )}
                   </span>
                 ) : (
                   <div className="flex flex-wrap gap-2">

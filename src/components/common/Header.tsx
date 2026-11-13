@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { AuthModal } from './AuthModal';
+import { resolveWorkspaceStateSummary } from '../../utils/navigationHelpers';
+import { resolveUnauthenticatedLoginPath } from '../../utils/workspaceAuth';
 
 interface HeaderProps {
   onToggleMobileMenu: () => void;
@@ -43,6 +45,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
   const {
     user,
     profile,
+    myContext,
     availableWorkspaces,
     activeWorkspace,
     setActiveWorkspaceByKey,
@@ -95,6 +98,12 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
   const initials = getInitials(displayName);
   const customAvatarUrl = !avatarLoadError ? profile?.avatar_url : '';
 
+  const summary = resolveWorkspaceStateSummary({
+    myContext,
+    availableWorkspaces,
+    activeWorkspace,
+  });
+
   const closeAllMenus = () => {
     setShowNotifications(false);
     setShowProfileMenu(false);
@@ -108,13 +117,14 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
   };
 
   const handleSignOut = async () => {
+    const targetLoginPath = resolveUnauthenticatedLoginPath(location.pathname);
     closeAllMenus();
     try {
       await signOut();
       showToast('Signed out cleanly.', 'info');
-      navigate('/login');
+      navigate(targetLoginPath);
     } catch {
-      navigate('/login');
+      navigate(targetLoginPath);
     }
   };
 
@@ -135,6 +145,14 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
     return '/notifications';
   })();
 
+  const logoTarget = activeWorkspace
+    ? activeWorkspace.default_path
+    : summary.isPlatformAdmin
+    ? '/platform/dashboard'
+    : summary.isClientOnlyAccount && summary.hasPendingClientRequest
+    ? '/login/client'
+    : '/workspaces';
+
   const profileRoute =
     activeWorkspace?.portal === 'doctor' && activeWorkspace.organization_slug
       ? `/${activeWorkspace.organization_slug}/doctor/profile`
@@ -144,6 +162,15 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
       ? `/${activeWorkspace.organization_slug}/admin/settings`
       : activeWorkspace?.portal === 'platform' || location.pathname.startsWith('/platform')
       ? '/platform/settings'
+      : '/workspaces';
+
+  const showProfileSettingsLink = Boolean(activeWorkspace) || isPlatformAdmin;
+
+  const clientHubPath =
+    activeWorkspace?.portal === 'client' && activeWorkspace.organization_slug
+      ? `/${activeWorkspace.organization_slug}/client/organizations`
+      : summary.hasPendingClientRequest
+      ? '/login/client'
       : '/workspaces';
 
   return (
@@ -165,7 +192,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
               type="button"
               onClick={() => {
                 closeAllMenus();
-                navigate(activeWorkspace ? activeWorkspace.default_path : '/workspaces');
+                navigate(logoTarget);
               }}
               className="flex items-center gap-2.5 text-left group select-none min-w-0"
             >
@@ -185,7 +212,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
 
           {/* Authenticated Workspace Switcher */}
           <div className="hidden md:flex items-center gap-2 relative">
-            {user && (
+            {user && !summary.isPlatformOnlyAccount && (
               <div className="relative">
                 <button
                   type="button"
@@ -200,7 +227,11 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                 >
                   <Building2 className="w-4 h-4 text-teal-700" />
                   <span className="max-w-[240px] truncate">
-                    {activeWorkspace ? activeWorkspace.label : 'Select Clinic Workspace'}
+                    {activeWorkspace
+                      ? activeWorkspace.label
+                      : summary.hasPendingClientRequest
+                      ? 'Pending Clinic Approval'
+                      : 'Select Workspace'}
                   </span>
                   <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
                 </button>
@@ -212,9 +243,27 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                     </div>
                     <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
                       {availableWorkspaces.length === 0 ? (
-                        <div className="px-3.5 py-3 text-xs text-slate-500">
-                          No active clinic portals yet. Visit My Workspaces to join or register a clinic.
-                        </div>
+                        summary.hasPendingClientRequest ? (
+                          <div className="p-3 space-y-2">
+                            {summary.pendingClientRequests.map((cc) => (
+                              <div
+                                key={cc.clinic_client_id}
+                                className="px-2.5 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs"
+                              >
+                                <div className="font-bold text-slate-900 truncate">
+                                  {cc.organization_name}
+                                </div>
+                                <div className="text-[11px] text-amber-800 mt-0.5">
+                                  Pet Owner Request — Pending Clinic Approval
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="px-3.5 py-3 text-xs text-slate-500">
+                            No active clinic portals yet.
+                          </div>
+                        )
                       ) : (
                         availableWorkspaces.map((ws) => {
                           const isSelected = activeWorkspace?.key === ws.key;
@@ -242,17 +291,33 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                       )}
                     </div>
                     <div className="border-t border-slate-100 pt-1 px-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          closeAllMenus();
-                          navigate('/workspaces');
-                        }}
-                        className="w-full text-left px-2.5 py-2 text-xs font-bold text-teal-700 hover:bg-teal-50 rounded-lg flex items-center gap-1.5"
-                      >
-                        <LayoutGrid className="w-3.5 h-3.5" />
-                        All Workspaces & Clinic Onboarding
-                      </button>
+                      {summary.isClientOnlyAccount && availableWorkspaces.length <= 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeAllMenus();
+                            navigate(clientHubPath);
+                          }}
+                          className="w-full text-left px-2.5 py-2 text-xs font-bold text-teal-700 hover:bg-teal-50 rounded-lg flex items-center gap-1.5"
+                        >
+                          <Building2 className="w-3.5 h-3.5" />
+                          {summary.hasPendingClientRequest && availableWorkspaces.length === 0
+                            ? 'View Pending Request Status'
+                            : 'Clinics & Access'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            closeAllMenus();
+                            navigate('/workspaces');
+                          }}
+                          className="w-full text-left px-2.5 py-2 text-xs font-bold text-teal-700 hover:bg-teal-50 rounded-lg flex items-center gap-1.5"
+                        >
+                          <LayoutGrid className="w-3.5 h-3.5" />
+                          All Workspaces &amp; Access
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -427,11 +492,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                       {displayName}
                     </div>
                     <div className="text-[10px] uppercase tracking-wider font-semibold text-teal-700">
-                      {activeWorkspace
-                        ? activeWorkspace.portal === 'platform'
-                          ? 'Platform Owner'
-                          : activeWorkspace.portal
-                        : 'Global Account'}
+                      {summary.headerRoleBadge}
                     </div>
                   </div>
                   {customAvatarUrl ? (
@@ -459,7 +520,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                       <div className="text-xs text-slate-500 truncate">{displayEmail}</div>
                       <div className="mt-1.5 flex items-center justify-between">
                         <span className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-teal-100 text-teal-800 uppercase">
-                          {activeWorkspace?.portal || 'Authenticated'}
+                          {summary.headerRoleBadge}
                         </span>
                         <span className="text-[10px] text-emerald-700 font-medium">
                           Verified Session
@@ -468,16 +529,42 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                     </div>
 
                     <div className="py-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigate('/workspaces');
-                          closeAllMenus();
-                        }}
-                        className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-100 font-medium"
-                      >
-                        My Workspaces & Clinics
-                      </button>
+                      {summary.isPlatformOnlyAccount ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigate('/platform/dashboard');
+                            closeAllMenus();
+                          }}
+                          className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-100 font-medium"
+                        >
+                          Platform Owner Console
+                        </button>
+                      ) : summary.isClientOnlyAccount && availableWorkspaces.length <= 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigate(clientHubPath);
+                            closeAllMenus();
+                          }}
+                          className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-100 font-medium"
+                        >
+                          {summary.hasPendingClientRequest && availableWorkspaces.length === 0
+                            ? 'Clinic Approval Status'
+                            : 'Clinics & Access'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigate('/workspaces');
+                            closeAllMenus();
+                          }}
+                          className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-100 font-medium"
+                        >
+                          My Workspaces &amp; Clinics
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -493,16 +580,18 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
                           </span>
                         )}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigate(profileRoute);
-                          closeAllMenus();
-                        }}
-                        className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-100 font-medium"
-                      >
-                        Portal Settings & Profile
-                      </button>
+                      {showProfileSettingsLink && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigate(profileRoute);
+                            closeAllMenus();
+                          }}
+                          className="w-full text-left px-3.5 py-1.5 text-xs text-slate-700 hover:bg-slate-100 font-medium"
+                        >
+                          Portal Settings &amp; Profile
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => void handleSignOut()}

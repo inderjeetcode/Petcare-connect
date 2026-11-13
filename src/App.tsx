@@ -10,8 +10,10 @@ import {
   RequireWorkspaceAccess,
   LegacyPortalRedirect,
 } from './components/auth/RouteGuards';
+import { ADMIN_ROUTE_PERMISSIONS } from './utils/workspaceAuth';
 
-// Auth & Onboarding Pages
+// Public & Auth / Onboarding Pages
+import { LandingPage } from './pages/public/LandingPage';
 import { AuthPage } from './pages/auth/AuthPage';
 import { ResetPasswordPage } from './pages/auth/ResetPasswordPage';
 import { AcceptInvitePage } from './pages/auth/AcceptInvitePage';
@@ -70,24 +72,28 @@ export default function App() {
       <AppProvider>
         <BrowserRouter>
           <Routes>
-            {/* Public Authentication & Onboarding Entry Routes */}
-            <Route path="/login" element={<AuthPage mode="login" />} />
-            <Route path="/signup" element={<AuthPage mode="signup" />} />
-            <Route path="/forgot-password" element={<AuthPage mode="forgot" />} />
+            {/* Public Landing, Authentication & Onboarding Entry Routes */}
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/login/client" element={<AuthPage mode="login" portal="client" />} />
+            <Route path="/login/clinic" element={<AuthPage mode="login" portal="clinic" />} />
+            <Route path="/platform/login" element={<AuthPage mode="login" portal="platform" />} />
+
+            {/* Legacy & Utility Auth Routes */}
+            <Route path="/login" element={<AuthPage mode="login" portal="generic" />} />
+            <Route path="/signup" element={<AuthPage mode="signup" portal="generic" />} />
+            <Route path="/forgot-password" element={<AuthPage mode="forgot" portal="generic" />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/accept-invite" element={<AcceptInvitePage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
             {/* Authenticated Application Shell */}
             <Route
-              path="/"
               element={
                 <RequireAuth>
                   <AppLayout />
                 </RequireAuth>
               }
             >
-              <Route index element={<Navigate to="/workspaces" replace />} />
               <Route path="workspaces" element={<WorkspacesPage />} />
               <Route
                 path="notifications"
@@ -182,22 +188,122 @@ export default function App() {
                   element={
                     <RequireWorkspaceAccess
                       portal="admin"
-                      requiredPermissions={['clients.approve', 'staff.manage', 'branch.manage']}
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.onboarding]}
                     >
                       <AdminOnboardingPage />
                     </RequireWorkspaceAccess>
                   }
                 />
-                <Route path="branches" element={<AdminBranchesPage />} />
-                <Route path="clients" element={<AdminClients />} />
-                <Route path="doctors" element={<AdminDoctors />} />
-                <Route path="pets" element={<AdminPets />} />
-                <Route path="consultations" element={<AdminConsultations />} />
-                <Route path="prescriptions" element={<AdminPrescriptions />} />
-                <Route path="medical-records" element={<AdminMedicalRecords />} />
-                <Route path="payments" element={<AdminPayments />} />
-                <Route path="reports" element={<AdminReports />} />
-                <Route path="settings" element={<AdminSettings />} />
+                <Route
+                  path="branches"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.branches]}
+                    >
+                      <AdminBranchesPage />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="clients"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.clients]}
+                    >
+                      <AdminClients />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="doctors"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.doctors]}
+                    >
+                      <AdminDoctors />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="pets"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.pets]}
+                    >
+                      <AdminPets />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="consultations"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.consultations]}
+                    >
+                      <AdminConsultations />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="prescriptions"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.prescriptions]}
+                    >
+                      <AdminPrescriptions />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="medical-records"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS['medical-records']]}
+                    >
+                      <AdminMedicalRecords />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="payments"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.payments]}
+                    >
+                      <AdminPayments />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="reports"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.reports]}
+                    >
+                      <AdminReports />
+                    </RequireWorkspaceAccess>
+                  }
+                />
+                <Route
+                  path="settings"
+                  element={
+                    <RequireWorkspaceAccess
+                      portal="admin"
+                      requiredPermissions={[...ADMIN_ROUTE_PERMISSIONS.settings]}
+                    >
+                      <AdminSettings />
+                    </RequireWorkspaceAccess>
+                  }
+                />
                 <Route
                   path="notifications"
                   element={
@@ -214,9 +320,9 @@ export default function App() {
               <Route path="client/*" element={<LegacyPortalRedirect portal="client" />} />
               <Route path="doctor/*" element={<LegacyPortalRedirect portal="doctor" />} />
               <Route path="admin/*" element={<LegacyPortalRedirect portal="admin" />} />
-
-              <Route path="*" element={<Navigate to="/workspaces" replace />} />
             </Route>
+
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AppProvider>

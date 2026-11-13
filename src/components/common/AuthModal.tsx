@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
 import { AuthFormCard } from '../auth/AuthFormCard';
+import { resolvePortalLandingDecision } from '../../utils/workspaceAuth';
 import {
   Lock,
   CheckCircle2,
@@ -17,11 +18,17 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
-  const { user, profile, availableWorkspaces, activeWorkspace, signOut } = useAuth();
+  const { user, profile, myContext, availableWorkspaces, activeWorkspace, signOut } = useAuth();
   const { showToast } = useApp();
   const navigate = useNavigate();
 
   if (!isOpen) return null;
+
+  const resolveModalPath = () => {
+    if (!myContext) return '/login/client';
+    const decision = resolvePortalLandingDecision(myContext, 'generic');
+    return decision.kind === 'redirect' ? decision.path : '/login/client';
+  };
 
   const handleSignOut = async () => {
     try {
@@ -95,11 +102,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                 type="button"
                 onClick={() => {
                   onClose();
-                  navigate('/workspaces');
+                  navigate(resolveModalPath());
                 }}
                 className="flex-1 py-2.5 px-4 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-xl transition-colors flex items-center justify-center gap-1.5"
               >
-                Workspaces
+                {availableWorkspaces.length > 0 ? 'Continue to Portal' : 'View Account Status'}
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
               <button
@@ -115,10 +122,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         ) : (
           <div className="p-6">
             <AuthFormCard
-              onSuccess={() => {
+              onSuccess={(ctx) => {
                 showToast('Signed in successfully.', 'success');
                 onClose();
-                navigate('/workspaces');
+                if (!ctx) {
+                  navigate('/login/client');
+                  return;
+                }
+                const decision = resolvePortalLandingDecision(ctx, 'generic');
+                navigate(
+                  decision.kind === 'redirect' ? decision.path : '/login/client'
+                );
               }}
             />
           </div>

@@ -3,6 +3,10 @@ import { NavLink, useLocation, useParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import {
+  buildSidebarNavigation,
+  SidebarIconKey,
+} from '../../utils/navigationHelpers';
+import {
   LayoutDashboard,
   PawPrint,
   Stethoscope,
@@ -31,16 +35,34 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-interface SidebarLinkItem {
-  to: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  badge?: number;
-}
+const ICON_MAP: Record<SidebarIconKey, React.ComponentType<{ className?: string }>> = {
+  dashboard: LayoutDashboard,
+  pets: PawPrint,
+  doctors: Stethoscope,
+  appointments: CalendarCheck,
+  consultations: ClipboardList,
+  chat: MessageSquare,
+  prescriptions: FileText,
+  medical_records: FileCheck,
+  payments: CreditCard,
+  notifications: Bell,
+  organizations: Building2,
+  profile: User,
+  settings: Settings,
+  workspaces: LayoutGrid,
+  branches: Building2,
+  onboarding: UserPlus,
+  clients: Users,
+  reports: BarChart3,
+  schedules: Clock,
+  platform_apps: ShieldCheck,
+  platform_users: Users,
+  invite: Ticket,
+};
 
 export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) => {
   const { consultations, notifications } = useApp();
-  const { activeWorkspace, isPlatformAdmin, hasPermission } = useAuth();
+  const { myContext, availableWorkspaces, activeWorkspace } = useAuth();
   const { orgSlug: routeOrgSlug } = useParams<{ orgSlug?: string }>();
   const location = useLocation();
 
@@ -52,199 +74,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
   ).length;
   const unreadNotifs = notifications.filter((n) => !n.is_read).length;
 
-  const isPlatformRoute = location.pathname.startsWith('/platform');
-  const isGlobalHubRoute =
-    location.pathname === '/workspaces' ||
-    location.pathname === '/accept-invite' ||
-    location.pathname === '/notifications';
+  const navModel = buildSidebarNavigation({
+    pathname: location.pathname,
+    routeOrgSlug,
+    myContext,
+    availableWorkspaces,
+    activeWorkspace,
+    counts: {
+      pendingRequests,
+      activeChats,
+      unreadNotifs,
+    },
+  });
 
-  const effectiveSlug =
-    routeOrgSlug || activeWorkspace?.organization_slug || '';
-  const orgId = activeWorkspace?.organization_id || '';
-
-  const buildLinks = (): { title: string; links: SidebarLinkItem[] } => {
-    if (isPlatformRoute) {
-      return {
-        title: 'Platform Governance',
-        links: [
-          {
-            to: '/platform/dashboard',
-            label: 'Platform Overview',
-            icon: LayoutDashboard,
-          },
-          {
-            to: '/platform/applications',
-            label: 'Clinic Applications',
-            icon: ShieldCheck,
-          },
-          {
-            to: '/platform/organizations',
-            label: 'Organizations',
-            icon: Building2,
-          },
-          {
-            to: '/platform/users',
-            label: 'Platform Users',
-            icon: Users,
-          },
-          {
-            to: '/platform/analytics',
-            label: 'Analytics & Audit',
-            icon: BarChart3,
-          },
-          {
-            to: '/platform/notifications',
-            label: 'Notifications',
-            icon: Bell,
-            badge: unreadNotifs,
-          },
-          {
-            to: '/platform/settings',
-            label: 'Platform Settings',
-            icon: Settings,
-          },
-          { to: '/workspaces', label: 'My Workspaces', icon: LayoutGrid },
-        ],
-      };
-    }
-
-    if (isGlobalHubRoute || !effectiveSlug) {
-      const globalLinks: SidebarLinkItem[] = [
-        { to: '/workspaces', label: 'My Workspaces', icon: LayoutGrid },
-        { to: '/notifications', label: 'Notifications', icon: Bell, badge: unreadNotifs },
-        { to: '/accept-invite', label: 'Accept Staff Invite', icon: Ticket },
-      ];
-      if (isPlatformAdmin) {
-        globalLinks.push({
-          to: '/platform/dashboard',
-          label: 'Platform Console',
-          icon: ShieldCheck,
-        });
-      }
-      return {
-        title: 'Pet Connect Hub',
-        links: globalLinks,
-      };
-    }
-
-    const prefix = `/${effectiveSlug}`;
-
-    if (location.pathname.includes('/doctor/') || activeWorkspace?.portal === 'doctor') {
-      return {
-        title: `${activeWorkspace?.organization_name || 'Clinical'} — Doctor`,
-        links: [
-          { to: `${prefix}/doctor/dashboard`, label: 'Doctor Dashboard', icon: LayoutDashboard },
-          { to: `${prefix}/doctor/requests`, label: 'Appointments', icon: CalendarCheck, badge: pendingRequests },
-          { to: `${prefix}/doctor/consultations`, label: 'Consultations', icon: ClipboardList, badge: activeChats },
-          { to: `${prefix}/doctor/chat`, label: 'Chat Sessions', icon: MessageSquare },
-          { to: `${prefix}/doctor/patients`, label: 'Patients Directory', icon: PawPrint },
-          { to: `${prefix}/doctor/prescriptions`, label: 'Prescriptions', icon: FileText },
-          { to: `${prefix}/doctor/medical-records`, label: 'Medical & Vaccines', icon: FileCheck },
-          { to: `${prefix}/doctor/availability`, label: 'Branches & Schedule', icon: Clock },
-          { to: `${prefix}/doctor/notifications`, label: 'Notifications', icon: Bell, badge: unreadNotifs },
-          { to: `${prefix}/doctor/profile`, label: 'Doctor Profile', icon: User },
-          { to: `${prefix}/doctor/settings`, label: 'Settings', icon: Settings },
-          { to: '/workspaces', label: 'Switch Workspace', icon: LayoutGrid },
-        ],
-      };
-    }
-
-    if (location.pathname.includes('/admin/') || activeWorkspace?.portal === 'admin') {
-      const adminLinks: SidebarLinkItem[] = [
-        { to: `${prefix}/admin/dashboard`, label: 'Admin Dashboard', icon: LayoutDashboard },
-      ];
-
-      if (
-        !orgId ||
-        hasPermission(orgId, 'clients.approve') ||
-        hasPermission(orgId, 'staff.manage') ||
-        hasPermission(orgId, 'branch.manage')
-      ) {
-        adminLinks.push({
-          to: `${prefix}/admin/onboarding`,
-          label: 'Onboarding & Access',
-          icon: UserPlus,
-        });
-      }
-
-      if (
-        !orgId ||
-        hasPermission(orgId, 'branch.manage') ||
-        hasPermission(orgId, 'schedules.manage')
-      ) {
-        adminLinks.push({
-          to: `${prefix}/admin/branches`,
-          label: 'Branches',
-          icon: Building2,
-        });
-      }
-
-      if (!orgId || hasPermission(orgId, 'clients.read')) {
-        adminLinks.push({ to: `${prefix}/admin/clients`, label: 'Client Management', icon: Users });
-      }
-      adminLinks.push({ to: `${prefix}/admin/doctors`, label: 'Doctor Management', icon: Stethoscope });
-      if (!orgId || hasPermission(orgId, 'pets.read')) {
-        adminLinks.push({ to: `${prefix}/admin/pets`, label: 'Pet Directory', icon: PawPrint });
-      }
-      if (!orgId || hasPermission(orgId, 'appointments.read') || hasPermission(orgId, 'consultations.manage')) {
-        adminLinks.push({
-          to: `${prefix}/admin/consultations`,
-          label: 'Appointments & Cases',
-          icon: CalendarCheck,
-          badge: pendingRequests,
-        });
-      }
-      if (!orgId || hasPermission(orgId, 'audit.read') || hasPermission(orgId, 'medical_records.read')) {
-        adminLinks.push(
-          { to: `${prefix}/admin/prescriptions`, label: 'Prescription Audit', icon: FileText },
-          { to: `${prefix}/admin/medical-records`, label: 'Medical Records', icon: ClipboardList }
-        );
-      }
-      if (!orgId || hasPermission(orgId, 'audit.read')) {
-        adminLinks.push(
-          { to: `${prefix}/admin/payments`, label: 'Payment Ledger', icon: CreditCard },
-          { to: `${prefix}/admin/reports`, label: 'Analytics & Reports', icon: BarChart3 }
-        );
-      }
-      if (!orgId || hasPermission(orgId, 'org.manage') || hasPermission(orgId, 'branch.manage') || hasPermission(orgId, 'staff.manage')) {
-        adminLinks.push({ to: `${prefix}/admin/settings`, label: 'Services & Settings', icon: Settings });
-      }
-      adminLinks.push({
-        to: `${prefix}/admin/notifications`,
-        label: 'Notifications',
-        icon: Bell,
-        badge: unreadNotifs,
-      });
-
-      adminLinks.push({ to: '/workspaces', label: 'Switch Workspace', icon: LayoutGrid });
-
-      return {
-        title: `${activeWorkspace?.organization_name || 'Clinic'} — Admin`,
-        links: adminLinks,
-      };
-    }
-
-    return {
-      title: `${activeWorkspace?.organization_name || 'Pet Owner'} — Client`,
-      links: [
-        { to: `${prefix}/client/dashboard`, label: 'Dashboard', icon: LayoutDashboard },
-        { to: `${prefix}/client/pets`, label: 'My Pets', icon: PawPrint },
-        { to: `${prefix}/client/doctors`, label: 'Find a Doctor', icon: Stethoscope },
-        { to: `${prefix}/client/consultations`, label: 'Appointments & Chats', icon: CalendarCheck, badge: activeChats },
-        { to: `${prefix}/client/chat`, label: 'Consultation Chat', icon: MessageSquare },
-        { to: `${prefix}/client/prescriptions`, label: 'Prescriptions', icon: FileText },
-        { to: `${prefix}/client/medical-records`, label: 'Medical Records', icon: ClipboardList },
-        { to: `${prefix}/client/payments`, label: 'Payments & Billing', icon: CreditCard },
-        { to: `${prefix}/client/notifications`, label: 'Notifications', icon: Bell, badge: unreadNotifs },
-        { to: `${prefix}/client/organizations`, label: 'Clinics & Access', icon: Building2 },
-        { to: `${prefix}/client/profile`, label: 'Client Profile', icon: User },
-        { to: `${prefix}/client/settings`, label: 'Settings', icon: Settings },
-        { to: '/workspaces', label: 'Switch Workspace', icon: LayoutGrid },
-      ],
-    };
-  };
-
-  const { title, links: currentLinks } = buildLinks();
+  const isPlatformRoute = navModel.portal === 'platform';
 
   return (
     <>
@@ -263,7 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
         <div className="flex-1 overflow-y-auto px-3.5 py-4">
           <div className="flex items-center justify-between pb-3 mb-2 border-b border-slate-100 md:hidden">
             <span className="text-xs font-bold uppercase tracking-wider text-teal-800 truncate">
-              {title}
+              {navModel.title}
             </span>
             <button
               type="button"
@@ -276,52 +119,58 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
           </div>
 
           <div className="px-3 pb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
-            {title}
+            {navModel.title}
           </div>
 
-          <nav className="space-y-1">
-            {currentLinks.map((link) => {
-              const Icon = link.icon;
-              return (
-                <NavLink
-                  key={link.to}
-                  to={link.to}
-                  onClick={onCloseMobile}
-                  className={({ isActive }) =>
-                    `flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-                      isActive
-                        ? 'bg-teal-700 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                    }`
-                  }
-                >
-                  {({ isActive }) => (
-                    <>
-                      <div className="flex items-center gap-3 min-w-0">
-                        <Icon
-                          className={`w-4 h-4 shrink-0 ${
-                            isActive ? 'text-white' : 'text-slate-500'
-                          }`}
-                        />
-                        <span className="truncate">{link.label}</span>
-                      </div>
-                      {Boolean(link.badge) && (
-                        <span
-                          className={`px-1.5 py-0.5 text-[11px] font-bold rounded-full ${
-                            isActive
-                              ? 'bg-teal-800 text-white'
-                              : 'bg-teal-100 text-teal-800'
-                          }`}
-                        >
-                          {link.badge}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </NavLink>
-              );
-            })}
-          </nav>
+          {navModel.items.length === 0 ? (
+            <div className="mx-2 mt-2 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 leading-relaxed">
+              No portal links are active until organization authorization is verified.
+            </div>
+          ) : (
+            <nav className="space-y-1">
+              {navModel.items.map((link) => {
+                const Icon = ICON_MAP[link.iconKey] || LayoutDashboard;
+                return (
+                  <NavLink
+                    key={link.to}
+                    to={link.to}
+                    onClick={onCloseMobile}
+                    className={({ isActive }) =>
+                      `flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                        isActive
+                          ? 'bg-teal-700 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Icon
+                            className={`w-4 h-4 shrink-0 ${
+                              isActive ? 'text-white' : 'text-slate-500'
+                            }`}
+                          />
+                          <span className="truncate">{link.label}</span>
+                        </div>
+                        {Boolean(link.badgeCount) && (
+                          <span
+                            className={`px-1.5 py-0.5 text-[11px] font-bold rounded-full ${
+                              isActive
+                                ? 'bg-teal-800 text-white'
+                                : 'bg-teal-100 text-teal-800'
+                            }`}
+                          >
+                            {link.badgeCount}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </NavLink>
+                );
+              })}
+            </nav>
+          )}
         </div>
 
         <div className="p-3.5 m-3 rounded-xl bg-teal-50/70 border border-teal-200/80">

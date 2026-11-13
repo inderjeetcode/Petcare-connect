@@ -13,6 +13,7 @@ import { authService, formatSupabaseError, SignUpResult } from '../services/auth
 import { Profile } from '../types';
 import {
   AuthStatus,
+  ContextStatus,
   MyClinicClient,
   MyContextResponse,
   MyMembership,
@@ -30,6 +31,8 @@ const ACTIVE_WORKSPACE_KEY = 'pet_connect_active_workspace_v1';
 interface AuthContextValue {
   isConfigured: boolean;
   authStatus: AuthStatus;
+  contextStatus: ContextStatus;
+  isContextReady: boolean;
   isLoading: boolean;
   isContextLoading: boolean;
   session: Session | null;
@@ -90,6 +93,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [myContext, setMyContext] = useState<MyContextResponse | null>(null);
+  const [contextStatus, setContextStatus] = useState<ContextStatus>('idle');
   const [isContextLoading, setIsContextLoading] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -104,6 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const recoveryModeRef = useRef<boolean>(false);
+  const contextRequestIdRef = useRef<number>(0);
 
   const persistWorkspaceKey = useCallback((key: string | null) => {
     setSelectedWorkspaceKey(key);
@@ -120,11 +125,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const clearAuthenticatedState = useCallback(
     (nextStatus: 'unauthenticated' | 'session_expired') => {
+      contextRequestIdRef.current += 1;
       recoveryModeRef.current = false;
       setSession(null);
       setUser(null);
       setProfile(null);
       setMyContext(null);
+      setContextStatus('idle');
+      setIsContextLoading(false);
       setAuthStatus(nextStatus);
       persistWorkspaceKey(null);
     },
@@ -133,6 +141,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const loadContextForSession = useCallback(
     async (activeSession: Session): Promise<MyContextResponse | null> => {
+      const requestId = ++contextRequestIdRef.current;
+      setContextStatus('loading');
       setIsContextLoading(true);
       setAuthError(null);
       try {
@@ -141,7 +151,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           authService.fetchProfile(activeSession.user.id).catch(() => null),
         ]);
 
+        if (requestId !== contextRequestIdRef.current) {
+          return null;
+        }
+
         setMyContext(ctx);
+        setContextStatus('ready');
         if (prof) {
           setProfile(prof);
         } else {
@@ -161,15 +176,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         }
         return ctx;
       } catch (err) {
+        if (requestId !== contextRequestIdRef.current) {
+          return null;
+        }
         if (isSessionExpiredError(err)) {
           setAuthError('Your session has expired. Please sign in again.');
           clearAuthenticatedState('session_expired');
           return null;
         }
-        setAuthError(formatSupabaseError(err, 'Unable to load organization workspace context.'));
+        setMyContext(null);
+        setContextStatus('error');
+        setAuthError(formatSupabaseError(err, 'Unable to verify organization workspace context.'));
         return null;
       } finally {
-        setIsContextLoading(false);
+        if (requestId === contextRequestIdRef.current) {
+          setIsContextLoading(false);
+        }
       }
     },
     [clearAuthenticatedState]
@@ -224,11 +246,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         if (isRecoveryUrl || recoveryModeRef.current) {
           recoveryModeRef.current = true;
           setAuthStatus('recovery');
-        } else {
-          setAuthStatus('authenticated');
+          await loadContextForSession(activeSession);
+          return;
         }
 
-        await loadContextForSession(activeSession);
+        // Hydrate database context BEFORE marking session ready/authenticated
+        setContextStatus('loading');
+        setIsContextLoading(true);
+        const loadedCtx = await loadContextForSession(activeSession);
+        if (!isMounted) return;
+        if (loadedCtx !== null) {
+          setAuthStatus('authenticated');
+        } else {
+          // If session expired, loadContextForSession already transitioned to session_expired.
+          // If RPC failed transiently while session remains valid, keep authenticated + contextStatus='error' for fail-closed UI.
+          setAuthStatus((prev) => (prev === 'session_expired' ? prev : 'authenticated'));
+        }
       } catch (err) {
         if (!isMounted) return;
         if (isSessionExpiredError(err)) {
@@ -265,21 +298,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
       setSession(nextSession);
       setUser(nextSession.user);
-      if (!recoveryModeRef.current) {
-        setAuthStatus('authenticated');
-      }
 
-      // Defer async Supabase RPC hydration outside onAuthStateChange callback to avoid client lock deadlocks
+      // Defer async Supabase RPC hydration outside onAuthStateChange callback to avoid client lock deadlocks,
+      // while synchronously marking context loading so no route guard decides on stale/empty context.
       if (
         event === 'SIGNED_IN' ||
         event === 'TOKEN_REFRESHED' ||
         event === 'USER_UPDATED'
       ) {
+        if (!recoveryModeRef.current) {
+          if (event === 'SIGNED_IN') {
+            setContextStatus('loading');
+            setIsContextLoading(true);
+          }
+          setAuthStatus('authenticated');
+        }
         setTimeout(() => {
           if (isMounted) {
             void loadContextForSession(nextSession);
           }
         }, 0);
+      } else if (!recoveryModeRef.current) {
+        setAuthStatus('authenticated');
       }
     });
 
@@ -351,6 +391,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     async (email: string, password: string): Promise<MyContextResponse> => {
       setAuthError(null);
       recoveryModeRef.current = false;
+      setContextStatus('loading');
+      setIsContextLoading(true);
       const { user: signedInUser, session: newSession } =
         await authService.signInWithPassword(email, password);
       setSession(newSession);
@@ -358,7 +400,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setAuthStatus('authenticated');
       const ctx = await loadContextForSession(newSession);
       if (!ctx) {
-        throw new Error('Signed in, but failed to load your organization context.');
+        throw new Error(
+          'Signed in, but failed to verify your account context from the database.'
+        );
       }
       return ctx;
     },
@@ -470,9 +514,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     [memberships]
   );
 
+  const isContextReady =
+    authStatus === 'authenticated' &&
+    contextStatus === 'ready' &&
+    myContext !== null;
+
   const value: AuthContextValue = {
     isConfigured: isSupabaseConfigured,
     authStatus,
+    contextStatus,
+    isContextReady,
     isLoading: authStatus === 'loading',
     isContextLoading,
     session,

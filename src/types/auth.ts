@@ -23,6 +23,10 @@ export type ClinicClientStatus =
 
 export type PortalKind = 'client' | 'doctor' | 'admin' | 'platform';
 
+export type AuthPortalEntry = 'generic' | 'client' | 'clinic' | 'platform';
+
+export type ContextStatus = 'idle' | 'loading' | 'ready' | 'error';
+
 export type AuthStatus =
   | 'loading'
   | 'authenticated'

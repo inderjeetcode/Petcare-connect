@@ -50,6 +50,9 @@ export const AdminOnboardingPage: React.FC = () => {
   const canManageStaff = orgId ? hasPermission(orgId, 'staff.manage') : false;
   const canAssignAdmin = orgId ? hasPermission(orgId, 'roles.assign_admin') : false;
   const canManageBranches = orgId ? hasPermission(orgId, 'branch.manage') : false;
+  const canAccessBranchesRoute = orgId
+    ? hasPermission(orgId, 'branch.manage') || hasPermission(orgId, 'schedules.manage')
+    : false;
 
   const [tab, setTab] = useState<'clients' | 'staff' | 'branches'>('clients');
   const [loading, setLoading] = useState(true);
@@ -709,7 +712,7 @@ export const AdminOnboardingPage: React.FC = () => {
               Clinic Branches ({branches.length})
             </h2>
             <div className="flex items-center gap-2">
-              {orgSlug && (
+              {orgSlug && canAccessBranchesRoute && (
                 <Link
                   to={`/${orgSlug}/admin/branches`}
                   className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl whitespace-nowrap"

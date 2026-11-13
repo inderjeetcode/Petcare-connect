@@ -125,15 +125,17 @@ export const AdminDashboard: React.FC = () => {
               <Bell className="w-3.5 h-3.5 text-teal-700" />
               Notifications
             </button>
-            <button
-              type="button"
-              onClick={() => navigate(`${adminBasePath}/reports`)}
-              className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
-            >
-              <BarChart3 className="w-3.5 h-3.5 text-teal-700" />
-              Full Reports
-            </button>
-            {workspace.canConfirmAppointments && (
+            {workspace.canReadAudit && (
+              <button
+                type="button"
+                onClick={() => navigate(`${adminBasePath}/reports`)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              >
+                <BarChart3 className="w-3.5 h-3.5 text-teal-700" />
+                Full Reports
+              </button>
+            )}
+            {(workspace.canReadAppointments || workspace.canManageConsultations) && (
               <button
                 type="button"
                 onClick={() => navigate(`${adminBasePath}/consultations`)}
@@ -304,14 +306,16 @@ export const AdminDashboard: React.FC = () => {
                     {svc.serviceName}: <strong className="text-slate-900">{svc.bookingCount}</strong> bookings
                   </span>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => navigate(`${adminBasePath}/reports`)}
-                  className="text-xs font-semibold text-teal-700 hover:underline inline-flex items-center gap-1 ml-1"
-                >
-                  Service Analytics
-                  <ArrowRight className="w-3 h-3" />
-                </button>
+                {workspace.canReadAudit && (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`${adminBasePath}/reports`)}
+                    className="text-xs font-semibold text-teal-700 hover:underline inline-flex items-center gap-1 ml-1"
+                  >
+                    Service Analytics
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -328,13 +332,16 @@ export const AdminDashboard: React.FC = () => {
                       Appointment load and practitioner coverage across clinic locations
                     </p>
                   </div>
-                  <button
-                    onClick={() => navigate(`${adminBasePath}/branches`)}
-                    className="text-xs font-semibold text-teal-700 hover:text-teal-800 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
-                  >
-                    Manage Branches
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
+                  {(workspace.canManageBranches || workspace.canManageSchedules) && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`${adminBasePath}/branches`)}
+                      className="text-xs font-semibold text-teal-700 hover:text-teal-800 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      Manage Branches
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
 
                 {branches.length === 0 ? (
@@ -410,13 +417,16 @@ export const AdminDashboard: React.FC = () => {
                       Requested visits requiring schedule verification and branch confirmation
                     </p>
                   </div>
-                  <button
-                    onClick={() => navigate(`${adminBasePath}/consultations`)}
-                    className="text-xs font-semibold text-teal-700 hover:text-teal-800 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
-                  >
-                    Review Queue
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
+                  {(workspace.canReadAppointments || workspace.canManageConsultations) && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`${adminBasePath}/consultations`)}
+                      className="text-xs font-semibold text-teal-700 hover:text-teal-800 inline-flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      Review Queue
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
 
                 {pendingAppointmentRequests.length === 0 ? (
@@ -439,12 +449,15 @@ export const AdminDashboard: React.FC = () => {
                             {new Date(appt.requested_start).toLocaleString()}
                           </div>
                         </div>
-                        <button
-                          onClick={() => navigate(`${adminBasePath}/consultations`)}
-                          className="px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-50 border border-teal-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                        >
-                          Review Slot
-                        </button>
+                        {(workspace.canReadAppointments || workspace.canManageConsultations) && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`${adminBasePath}/consultations`)}
+                            className="px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-50 border border-teal-200 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                          >
+                            Review Slot
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -461,12 +474,15 @@ export const AdminDashboard: React.FC = () => {
                     <UserCheck className="w-4 h-4 text-teal-700" />
                     Client Join Requests
                   </h3>
-                  <button
-                    onClick={() => navigate(`${adminBasePath}/clients`)}
-                    className="text-xs font-semibold text-teal-700 hover:text-teal-800 whitespace-nowrap shrink-0"
-                  >
-                    View All
-                  </button>
+                  {workspace.canReadClients && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`${adminBasePath}/clients`)}
+                      className="text-xs font-semibold text-teal-700 hover:text-teal-800 whitespace-nowrap shrink-0"
+                    >
+                      View All
+                    </button>
+                  )}
                 </div>
 
                 {pendingClients.length === 0 ? (
@@ -486,12 +502,15 @@ export const AdminDashboard: React.FC = () => {
                             {client.email || client.phone || 'No contact provided'}
                           </div>
                         </div>
-                        <button
-                          onClick={() => navigate(`${adminBasePath}/clients`)}
-                          className="px-2.5 py-1 text-[11px] font-semibold text-teal-700 bg-white border border-teal-200 rounded-md hover:bg-teal-50 shrink-0"
-                        >
-                          Review
-                        </button>
+                        {workspace.canReadClients && (
+                          <button
+                            type="button"
+                            onClick={() => navigate(`${adminBasePath}/clients`)}
+                            className="px-2.5 py-1 text-[11px] font-semibold text-teal-700 bg-white border border-teal-200 rounded-md hover:bg-teal-50 shrink-0"
+                          >
+                            Review
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>

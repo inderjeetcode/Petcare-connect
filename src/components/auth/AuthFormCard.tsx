@@ -19,6 +19,9 @@ export type AuthFormMode = 'login' | 'signup' | 'forgot';
 
 interface AuthFormCardProps {
   initialMode?: AuthFormMode;
+  allowSignup?: boolean;
+  infoNote?: string | null;
+  submitLabel?: string;
   expiredSessionNotice?: boolean;
   onSuccess?: (context?: MyContextResponse) => void;
   onModeChange?: (mode: AuthFormMode) => void;
@@ -26,6 +29,9 @@ interface AuthFormCardProps {
 
 export const AuthFormCard: React.FC<AuthFormCardProps> = ({
   initialMode = 'login',
+  allowSignup = true,
+  infoNote = 'One global Pet Connect account gives you access to all veterinary clinics where you are an approved pet owner, doctor, or staff member.',
+  submitLabel,
   expiredSessionNotice = false,
   onSuccess,
   onModeChange,
@@ -44,12 +50,14 @@ export const AuthFormCard: React.FC<AuthFormCardProps> = ({
   const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
-    setMode(initialMode);
+    const safeMode = !allowSignup && initialMode === 'signup' ? 'login' : initialMode;
+    setMode(safeMode);
     setErrorMessage('');
     setSuccessMessage('');
-  }, [initialMode]);
+  }, [initialMode, allowSignup]);
 
   const switchMode = (next: AuthFormMode) => {
+    if (!allowSignup && next === 'signup') return;
     setMode(next);
     setErrorMessage('');
     setSuccessMessage('');
@@ -160,13 +168,13 @@ export const AuthFormCard: React.FC<AuthFormCardProps> = ({
         </div>
       )}
 
-      {/* Global Identity Note */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-600 flex items-start gap-2">
-        <Lock className="w-3.5 h-3.5 text-teal-700 shrink-0 mt-0.5" />
-        <span>
-          One global Pet Connect account gives you access to all veterinary clinics where you are an approved pet owner, doctor, or staff member.
-        </span>
-      </div>
+      {/* Account / Portal Notice */}
+      {infoNote && (
+        <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-600 flex items-start gap-2">
+          <Lock className="w-3.5 h-3.5 text-teal-700 shrink-0 mt-0.5" />
+          <span>{infoNote}</span>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-3.5">
         {mode === 'signup' && (
@@ -288,38 +296,40 @@ export const AuthFormCard: React.FC<AuthFormCardProps> = ({
           {mode === 'forgot'
             ? 'Send Password Reset Link'
             : mode === 'signup'
-            ? 'Create Global Account'
-            : 'Sign In'}
+            ? 'Create Account'
+            : submitLabel || 'Sign In'}
         </button>
       </form>
 
-      <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-        {mode === 'forgot' ? (
-          <button
-            type="button"
-            onClick={() => switchMode('login')}
-            className="text-teal-700 hover:underline font-medium"
-          >
-            Back to Sign In
-          </button>
-        ) : mode === 'signup' ? (
-          <button
-            type="button"
-            onClick={() => switchMode('login')}
-            className="text-teal-700 hover:underline font-medium"
-          >
-            Already have an account? Sign In
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => switchMode('signup')}
-            className="text-teal-700 hover:underline font-medium"
-          >
-            New to Pet Connect? Create global account
-          </button>
-        )}
-      </div>
+      {(mode === 'forgot' || allowSignup) && (
+        <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+          {mode === 'forgot' ? (
+            <button
+              type="button"
+              onClick={() => switchMode('login')}
+              className="text-teal-700 hover:underline font-medium"
+            >
+              Back to Sign In
+            </button>
+          ) : mode === 'signup' ? (
+            <button
+              type="button"
+              onClick={() => switchMode('login')}
+              className="text-teal-700 hover:underline font-medium"
+            >
+              Already have an account? Sign In
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => switchMode('signup')}
+              className="text-teal-700 hover:underline font-medium"
+            >
+              New to Pet Connect? Create account
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

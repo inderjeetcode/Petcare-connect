@@ -1,4 +1,5 @@
 import {
+  AuthPortalEntry,
   MyClinicClient,
   MyContextResponse,
   MyMembership,
@@ -313,6 +314,281 @@ export function checkWorkspacePortalAccess(
     organizationName: membership.organization_name,
     membership,
   };
+}
+
+const AUTH_ENTRY_PATHS = new Set([
+  '/',
+  '/login',
+  '/login/client',
+  '/login/clinic',
+  '/platform/login',
+  '/signup',
+  '/forgot-password',
+  '/unauthorized',
+]);
+
+/**
+ * Maps Organization Admin route sections to the exact database permissions required.
+ * Enforced both at route level (RouteGuards + App.tsx) and in return-path validation.
+ */
+export const ADMIN_ROUTE_PERMISSIONS = {
+  onboarding: ['clients.approve', 'staff.manage', 'branch.manage'],
+  branches: ['branch.manage', 'schedules.manage'],
+  clients: ['clients.read'],
+  doctors: ['staff.manage', 'schedules.manage'],
+  pets: ['pets.read'],
+  consultations: ['appointments.read', 'consultations.manage'],
+  prescriptions: ['audit.read', 'medical_records.read'],
+  'medical-records': ['audit.read', 'medical_records.read'],
+  payments: ['audit.read'],
+  reports: ['audit.read'],
+  settings: ['org.manage', 'branch.manage', 'staff.manage'],
+} as const satisfies Record<string, readonly string[]>;
+
+export function getAdminSectionRequiredPermissions(
+  section: string | undefined
+): readonly string[] | undefined {
+  const key = (section || '').trim().toLowerCase().split('/')[0];
+  if (!key) return undefined;
+  return (ADMIN_ROUTE_PERMISSIONS as Record<string, readonly string[]>)[key];
+}
+
+export function hasAnyRequiredPermission(
+  grantedPermissions: readonly string[] | undefined,
+  requiredPermissions: readonly string[] | undefined
+): boolean {
+  if (!requiredPermissions || requiredPermissions.length === 0) return true;
+  if (!grantedPermissions || grantedPermissions.length === 0) return false;
+  return requiredPermissions.some((perm) => grantedPermissions.includes(perm));
+}
+
+/**
+ * Resolves the portal-specific login entrypoint for unauthenticated access.
+ */
+export function resolveUnauthenticatedLoginPath(pathname: string): string {
+  const normalized = (pathname || '').trim().toLowerCase().replace(/\/+$/, '') || '/';
+
+  if (normalized === '/platform' || normalized.startsWith('/platform/')) {
+    return '/platform/login';
+  }
+
+  if (
+    /^\/[^/]+\/client(\/|$)/.test(normalized) ||
+    normalized === '/client' ||
+    normalized.startsWith('/client/')
+  ) {
+    return '/login/client';
+  }
+
+  if (
+    /^\/[^/]+\/(doctor|admin)(\/|$)/.test(normalized) ||
+    normalized === '/doctor' ||
+    normalized.startsWith('/doctor/') ||
+    normalized === '/admin' ||
+    normalized.startsWith('/admin/')
+  ) {
+    return '/login/clinic';
+  }
+
+  return '/login';
+}
+
+/**
+ * Validates an untrusted `location.state.from` destination strictly against
+ * the authenticated user's database-returned `get_my_context()` and portal entry intent.
+ * Returns a normalized internal path+search, or `null` if rejected.
+ */
+export function isAuthorizedReturnPath(
+  context: MyContextResponse | null,
+  rawPath: string | undefined,
+  portalIntent: AuthPortalEntry = 'generic'
+): string | null {
+  if (!context || !rawPath) return null;
+  const trimmed = rawPath.trim();
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('\\')) {
+    return null;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed, 'https://petconnect.local');
+  } catch {
+    return null;
+  }
+  if (parsed.origin !== 'https://petconnect.local') {
+    return null;
+  }
+
+  const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+  const normalizedFull = `${pathname}${parsed.search}`;
+
+  if (AUTH_ENTRY_PATHS.has(pathname)) {
+    return null;
+  }
+
+  if (pathname === '/accept-invite' || pathname === '/reset-password') {
+    return normalizedFull;
+  }
+
+  const workspaces = buildWorkspaceOptions(context);
+  const staffWorkspaces = workspaces.filter(
+    (w) => w.portal === 'doctor' || w.portal === 'admin'
+  );
+  const clientWorkspaces = workspaces.filter((w) => w.portal === 'client');
+
+  if (pathname === '/notifications') {
+    return portalIntent === 'generic' || workspaces.length > 0 ? normalizedFull : null;
+  }
+
+  if (pathname === '/platform' || pathname.startsWith('/platform/')) {
+    if (!context.is_platform_admin) return null;
+    if (portalIntent !== 'platform' && portalIntent !== 'generic') return null;
+    return normalizedFull;
+  }
+
+  const tenantMatch = pathname.match(/^\/([^/]+)\/(client|doctor|admin)(?:\/(.*))?$/i);
+  if (tenantMatch) {
+    const [, orgSlug, rawPortal, subpath = ''] = tenantMatch;
+    const targetPortal = rawPortal.toLowerCase() as Exclude<PortalKind, 'platform'>;
+
+    if (portalIntent === 'platform') return null;
+    if (portalIntent === 'client' && targetPortal !== 'client') return null;
+    if (portalIntent === 'clinic' && targetPortal === 'client') return null;
+
+    const access = checkWorkspacePortalAccess(context, orgSlug, targetPortal);
+    if (!access.allowed) return null;
+
+    if (targetPortal === 'admin') {
+      const requiredPerms = getAdminSectionRequiredPermissions(subpath);
+      if (!hasAnyRequiredPermission(access.membership?.permissions, requiredPerms)) {
+        return null;
+      }
+    }
+
+    return normalizedFull;
+  }
+
+  const legacyMatch = pathname.match(/^\/(client|doctor|admin)(?:\/(.*))?$/i);
+  if (legacyMatch) {
+    const legacyPortal = legacyMatch[1].toLowerCase() as Exclude<PortalKind, 'platform'>;
+    const legacySubpath = legacyMatch[2] || '';
+    if (portalIntent === 'platform') return null;
+    if (portalIntent === 'client' && legacyPortal !== 'client') return null;
+    if (portalIntent === 'clinic' && legacyPortal === 'client') return null;
+    const matchingWorkspaces = workspaces.filter((w) => w.portal === legacyPortal);
+    if (matchingWorkspaces.length === 0) return null;
+
+    if (legacyPortal === 'admin') {
+      const requiredPerms = getAdminSectionRequiredPermissions(legacySubpath);
+      if (
+        !matchingWorkspaces.some((w) =>
+          hasAnyRequiredPermission(w.permissions, requiredPerms)
+        )
+      ) {
+        return null;
+      }
+    }
+
+    return normalizedFull;
+  }
+
+  if (pathname === '/workspaces') {
+    if (portalIntent === 'platform') return null;
+    if (portalIntent === 'clinic') return staffWorkspaces.length > 0 ? normalizedFull : null;
+    if (portalIntent === 'client') return clientWorkspaces.length > 1 ? normalizedFull : null;
+    return workspaces.length > 0 ? normalizedFull : null;
+  }
+
+  return null;
+}
+
+export type PortalLandingDecision =
+  | { kind: 'redirect'; path: string }
+  | { kind: 'client_pending_status'; clinicClients: MyClinicClient[] }
+  | {
+      kind: 'denied';
+      reason: 'platform_forbidden' | 'clinic_membership_required';
+      message: string;
+    };
+
+/**
+ * Resolves post-authentication landing exclusively from verified `get_my_context()` data.
+ */
+export function resolvePortalLandingDecision(
+  context: MyContextResponse,
+  portalIntent: AuthPortalEntry = 'generic',
+  stateFrom?: string
+): PortalLandingDecision {
+  const validReturn = isAuthorizedReturnPath(context, stateFrom, portalIntent);
+  if (validReturn) {
+    return { kind: 'redirect', path: validReturn };
+  }
+
+  const workspaces = buildWorkspaceOptions(context);
+  const staffWorkspaces = workspaces.filter(
+    (w) => w.portal === 'doctor' || w.portal === 'admin'
+  );
+  const clientWorkspaces = workspaces.filter((w) => w.portal === 'client');
+  const clinicClients = context.clinic_clients || [];
+
+  if (portalIntent === 'platform') {
+    if (context.is_platform_admin) {
+      return { kind: 'redirect', path: '/platform/dashboard' };
+    }
+    return {
+      kind: 'denied',
+      reason: 'platform_forbidden',
+      message:
+        'Access denied: this account does not hold active Platform Owner governance authorization.',
+    };
+  }
+
+  if (portalIntent === 'clinic') {
+    if (staffWorkspaces.length === 1) {
+      return { kind: 'redirect', path: staffWorkspaces[0].default_path };
+    }
+    if (staffWorkspaces.length > 1) {
+      return { kind: 'redirect', path: '/workspaces' };
+    }
+    return {
+      kind: 'denied',
+      reason: 'clinic_membership_required',
+      message:
+        'No active clinic staff or veterinarian membership was found for this account. Clinic access requires clinic administrator approval or a staff invitation.',
+    };
+  }
+
+  if (portalIntent === 'client') {
+    if (clientWorkspaces.length === 1) {
+      return { kind: 'redirect', path: clientWorkspaces[0].default_path };
+    }
+    if (clientWorkspaces.length > 1) {
+      return { kind: 'redirect', path: '/workspaces' };
+    }
+    return {
+      kind: 'client_pending_status',
+      clinicClients,
+    };
+  }
+
+  // Legacy/generic entry (/login, /signup)
+  if (workspaces.length === 1) {
+    return { kind: 'redirect', path: workspaces[0].default_path };
+  }
+  if (workspaces.length > 1) {
+    return { kind: 'redirect', path: '/workspaces' };
+  }
+  if (
+    !context.is_platform_admin &&
+    (context.memberships || []).length === 0 &&
+    clinicClients.length > 0
+  ) {
+    return {
+      kind: 'client_pending_status',
+      clinicClients,
+    };
+  }
+  return { kind: 'redirect', path: '/workspaces' };
 }
 
 export function deriveLegacyPortalRole(workspace: WorkspaceOption | null): UserRole {

@@ -1,8 +1,12 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate, Outlet, useLocation, useParams, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { PortalKind } from '../../types/auth';
-import { checkWorkspacePortalAccess } from '../../utils/workspaceAuth';
+import {
+  checkWorkspacePortalAccess,
+  hasAnyRequiredPermission,
+  resolveUnauthenticatedLoginPath,
+} from '../../utils/workspaceAuth';
 import {
   ShieldAlert,
   Clock,
@@ -10,6 +14,9 @@ import {
   ArrowRight,
   Building2,
   Loader2,
+  AlertTriangle,
+  RefreshCw,
+  LogOut,
 } from 'lucide-react';
 
 const FullscreenLoading: React.FC<{ message?: string }> = ({
@@ -27,13 +34,28 @@ const FullscreenLoading: React.FC<{ message?: string }> = ({
 /**
  * Frontend route guard (UX only; PostgreSQL RLS & SECURITY DEFINER RPCs enforce actual security).
  */
-export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({
-  children,
-}) => {
-  const { authStatus, isContextLoading, myContext, signOut } = useAuth();
+export const RequireAuth: React.FC<{
+  children?: React.ReactNode;
+  loginPath?: string;
+}> = ({ children, loginPath }) => {
+  const {
+    authStatus,
+    contextStatus,
+    isContextLoading,
+    myContext,
+    authError,
+    refreshContext,
+    signOut,
+  } = useAuth();
   const location = useLocation();
+  const [retrying, setRetrying] = useState(false);
 
-  if (authStatus === 'loading' || (authStatus === 'authenticated' && isContextLoading && !myContext)) {
+  if (
+    authStatus === 'loading' ||
+    (authStatus === 'authenticated' &&
+      !myContext &&
+      (isContextLoading || contextStatus === 'idle' || contextStatus === 'loading'))
+  ) {
     return <FullscreenLoading />;
   }
 
@@ -42,9 +64,11 @@ export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({
   }
 
   if (authStatus === 'unauthenticated' || authStatus === 'session_expired') {
+    const targetLoginPath =
+      loginPath || resolveUnauthenticatedLoginPath(location.pathname);
     return (
       <Navigate
-        to="/login"
+        to={targetLoginPath}
         replace
         state={{
           from: `${location.pathname}${location.search}`,
@@ -54,7 +78,56 @@ export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({
     );
   }
 
-  if (myContext?.profile?.platform_status === 'suspended') {
+  if (contextStatus === 'error' || !myContext) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-rose-200 p-8 shadow-xs text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl mx-auto bg-rose-50 text-rose-700 border border-rose-200 flex items-center justify-center">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <h1 className="text-lg font-bold text-slate-900">Account Verification Failed</h1>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            {authError ||
+              'Could not verify your organization memberships and roles from the database. Access is blocked until verification succeeds.'}
+          </p>
+          <div className="flex items-center justify-center gap-2.5 pt-1">
+            <button
+              type="button"
+              disabled={retrying}
+              onClick={async () => {
+                setRetrying(true);
+                try {
+                  await refreshContext();
+                } finally {
+                  setRetrying(false);
+                }
+              }}
+              className="px-4 py-2 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 disabled:opacity-50 rounded-xl inline-flex items-center gap-1.5"
+            >
+              {retrying ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              Retry Verification
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void signOut();
+              }}
+              className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl inline-flex items-center gap-1.5"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (myContext.profile?.platform_status === 'suspended') {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-white rounded-2xl border border-rose-200 p-8 shadow-xs text-center space-y-4">
@@ -85,8 +158,13 @@ export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({
 export const RequirePlatformAdmin: React.FC<{ children?: React.ReactNode }> = ({
   children,
 }) => {
-  const { isPlatformAdmin, isContextLoading, myContext, syncWorkspaceFromRoute } =
-    useAuth();
+  const {
+    isPlatformAdmin,
+    contextStatus,
+    isContextLoading,
+    myContext,
+    syncWorkspaceFromRoute,
+  } = useAuth();
 
   useEffect(() => {
     if (isPlatformAdmin) {
@@ -94,11 +172,14 @@ export const RequirePlatformAdmin: React.FC<{ children?: React.ReactNode }> = ({
     }
   }, [isPlatformAdmin, syncWorkspaceFromRoute]);
 
-  if (isContextLoading && !myContext) {
+  if (
+    !myContext &&
+    (isContextLoading || contextStatus === 'idle' || contextStatus === 'loading')
+  ) {
     return <FullscreenLoading message="Verifying Platform Owner privileges..." />;
   }
 
-  if (!isPlatformAdmin) {
+  if (!myContext || contextStatus === 'error' || !isPlatformAdmin) {
     return (
       <Navigate
         to="/unauthorized"
@@ -126,7 +207,13 @@ export const RequireWorkspaceAccess: React.FC<RequireWorkspaceAccessProps> = ({
   children,
 }) => {
   const { orgSlug } = useParams<{ orgSlug: string }>();
-  const { myContext, isContextLoading, syncWorkspaceFromRoute } = useAuth();
+  const {
+    myContext,
+    contextStatus,
+    isContextLoading,
+    availableWorkspaces,
+    syncWorkspaceFromRoute,
+  } = useAuth();
 
   const result = checkWorkspacePortalAccess(myContext, orgSlug, portal);
 
@@ -136,13 +223,25 @@ export const RequireWorkspaceAccess: React.FC<RequireWorkspaceAccessProps> = ({
     }
   }, [result.allowed, orgSlug, portal, syncWorkspaceFromRoute]);
 
-  if (isContextLoading && !myContext) {
+  if (
+    !myContext &&
+    (isContextLoading || contextStatus === 'idle' || contextStatus === 'loading')
+  ) {
     return <FullscreenLoading message="Loading organization permissions..." />;
   }
 
   if (!result.allowed) {
     const isPending =
       result.reason === 'org_pending' || result.reason === 'client_requested';
+    const hasWorkspaces = availableWorkspaces.length > 0;
+    const backPath =
+      result.reason === 'client_requested' && !hasWorkspaces
+        ? '/login/client'
+        : '/workspaces';
+    const backLabel =
+      result.reason === 'client_requested' && !hasWorkspaces
+        ? 'View Pet Owner Status'
+        : 'Go to My Workspaces';
 
     return (
       <div className="max-w-xl mx-auto mt-12 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs text-center space-y-4">
@@ -174,10 +273,10 @@ export const RequireWorkspaceAccess: React.FC<RequireWorkspaceAccessProps> = ({
 
         <div className="pt-2 flex items-center justify-center gap-3">
           <Link
-            to="/workspaces"
+            to={backPath}
             className="px-4 py-2 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-xl transition-colors inline-flex items-center gap-1.5"
           >
-            Go to My Workspaces
+            {backLabel}
             <ArrowRight className="w-3.5 h-3.5" />
           </Link>
         </div>
@@ -188,8 +287,7 @@ export const RequireWorkspaceAccess: React.FC<RequireWorkspaceAccessProps> = ({
   if (
     requiredPermissions &&
     requiredPermissions.length > 0 &&
-    result.membership &&
-    !requiredPermissions.some((p) => result.membership!.permissions.includes(p))
+    !hasAnyRequiredPermission(result.membership?.permissions, requiredPermissions)
   ) {
     return (
       <div className="max-w-xl mx-auto mt-12 bg-white rounded-2xl border border-slate-200 p-8 shadow-xs text-center space-y-4">
@@ -214,19 +312,46 @@ export const RequireWorkspaceAccess: React.FC<RequireWorkspaceAccessProps> = ({
 };
 
 /**
- * Redirects legacy unscoped portal paths (e.g., /client/dashboard) to the user's
- * active verified workspace or to /workspaces when no workspace matches.
+ * Redirects legacy unscoped portal paths (e.g., /client/pets, /doctor/consultations)
+ * to the user's verified workspace preserving the subpath, once context hydration completes.
  */
 export const LegacyPortalRedirect: React.FC<{
   portal: Exclude<PortalKind, 'platform'>;
   subpath?: string;
 }> = ({ portal, subpath = 'dashboard' }) => {
-  const { availableWorkspaces, activeWorkspace } = useAuth();
+  const {
+    myContext,
+    contextStatus,
+    isContextLoading,
+    availableWorkspaces,
+    activeWorkspace,
+    clinicClients,
+    isPlatformAdmin,
+  } = useAuth();
+  const params = useParams<{ '*'?: string }>();
+  const location = useLocation();
+
+  if (
+    !myContext &&
+    (isContextLoading || contextStatus === 'idle' || contextStatus === 'loading')
+  ) {
+    return <FullscreenLoading message="Resolving verified portal workspace..." />;
+  }
+
+  if (contextStatus === 'error' || !myContext) {
+    return null;
+  }
+
+  const rawWildcard = (params['*'] || '').replace(/^\/+/, '');
+  const resolvedSubpath = rawWildcard || subpath || 'dashboard';
+  const targetSuffix = location.search
+    ? `${resolvedSubpath}${location.search}`
+    : resolvedSubpath;
 
   if (activeWorkspace && activeWorkspace.portal === portal && activeWorkspace.organization_slug) {
     return (
       <Navigate
-        to={`/${activeWorkspace.organization_slug}/${portal}/${subpath}`}
+        to={`/${activeWorkspace.organization_slug}/${portal}/${targetSuffix}`}
         replace
       />
     );
@@ -238,11 +363,32 @@ export const LegacyPortalRedirect: React.FC<{
   if (firstMatch && firstMatch.organization_slug) {
     return (
       <Navigate
-        to={`/${firstMatch.organization_slug}/${portal}/${subpath}`}
+        to={`/${firstMatch.organization_slug}/${portal}/${targetSuffix}`}
         replace
       />
     );
   }
 
-  return <Navigate to="/workspaces" replace />;
+  if (
+    portal === 'client' &&
+    availableWorkspaces.length === 0 &&
+    !isPlatformAdmin &&
+    clinicClients.length > 0
+  ) {
+    return <Navigate to="/login/client" replace />;
+  }
+
+  if (availableWorkspaces.length > 0) {
+    return <Navigate to="/workspaces" replace />;
+  }
+
+  return (
+    <Navigate
+      to="/unauthorized"
+      replace
+      state={{
+        reason: `No active ${portal} workspace access was found for your account.`,
+      }}
+    />
+  );
 };

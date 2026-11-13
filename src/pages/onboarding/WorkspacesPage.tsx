@@ -7,6 +7,7 @@ import { formatSupabaseError } from '../../services/authService';
 import { Organization, OrganizationApplication, WorkspaceOption } from '../../types/auth';
 import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
+import { resolveWorkspaceStateSummary } from '../../utils/navigationHelpers';
 import {
   Building2,
   Stethoscope,
@@ -38,7 +39,9 @@ export const WorkspacesPage: React.FC = () => {
   const {
     profile,
     user,
+    myContext,
     availableWorkspaces,
+    activeWorkspace,
     memberships,
     clinicClients,
     isPlatformAdmin,
@@ -190,29 +193,52 @@ export const WorkspacesPage: React.FC = () => {
     (c) => c.client_status !== 'approved' || c.organization_status !== 'active'
   );
 
+  const summary = resolveWorkspaceStateSummary({
+    myContext,
+    availableWorkspaces,
+    activeWorkspace,
+  });
+
+  const showStaffOnboardingActions =
+    !summary.isClientOnlyAccount && !summary.isPlatformOnlyAccount;
+
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
       <PageHeader
-        title="My Workspaces & Clinic Onboarding"
+        title={
+          summary.isClientOnlyAccount
+            ? 'Clinics & Pet Owner Access'
+            : 'My Workspaces & Clinic Onboarding'
+        }
         subtitle={`Signed in as ${profile?.full_name || user?.email || 'Authenticated User'} (${profile?.email || user?.email || ''})`}
         action={
-          <div className="flex flex-wrap items-center gap-2">
+          showStaffOnboardingActions ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                to="/accept-invite"
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl inline-flex items-center gap-1.5"
+              >
+                <Ticket className="w-3.5 h-3.5 text-teal-700" />
+                Accept Staff Invite
+              </Link>
+              <button
+                type="button"
+                onClick={() => setShowRegisterModal(true)}
+                className="px-4 py-2 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-xl inline-flex items-center gap-1.5 shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Register Veterinary Clinic
+              </button>
+            </div>
+          ) : summary.isPlatformOnlyAccount ? (
             <Link
-              to="/accept-invite"
-              className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl inline-flex items-center gap-1.5"
+              to="/platform/dashboard"
+              className="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl inline-flex items-center gap-1.5"
             >
-              <Ticket className="w-3.5 h-3.5 text-teal-700" />
-              Accept Staff Invite
+              <ShieldCheck className="w-3.5 h-3.5 text-teal-300" />
+              Open Platform Console
             </Link>
-            <button
-              type="button"
-              onClick={() => setShowRegisterModal(true)}
-              className="px-4 py-2 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-xl inline-flex items-center gap-1.5 shadow-xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Register Veterinary Clinic
-            </button>
-          </div>
+          ) : undefined
         }
       />
 
@@ -236,15 +262,35 @@ export const WorkspacesPage: React.FC = () => {
         </div>
 
         {availableWorkspaces.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center space-y-2">
-            <Building2 className="w-8 h-8 text-slate-400 mx-auto" />
-            <div className="text-sm font-bold text-slate-900">
-              No Active Clinic Workspaces Yet
+          summary.hasPendingClientRequest ? (
+            <div className="bg-amber-50/70 rounded-2xl border border-amber-200 p-6 space-y-2">
+              <div className="flex items-center gap-2 text-amber-900">
+                <Clock className="w-5 h-5 text-amber-700 shrink-0" />
+                <div className="text-sm font-bold">
+                  Clinic Approval Pending
+                </div>
+              </div>
+              <p className="text-xs text-amber-900/90 leading-relaxed max-w-2xl">
+                Your Pet Owner join request to{' '}
+                <strong>
+                  {summary.pendingClientRequests
+                    .map((c) => c.organization_name)
+                    .join(', ')}
+                </strong>{' '}
+                is awaiting clinic staff approval. Your pet dashboard, appointment booking, and consultation chat will unlock automatically once approved.
+              </p>
             </div>
-            <p className="text-xs text-slate-600 max-w-lg mx-auto">
-              Request to join an active veterinary clinic below as a pet owner, accept a staff invitation token, or submit a new clinic organization application for Platform Owner review.
-            </p>
-          </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center space-y-2">
+              <Building2 className="w-8 h-8 text-slate-400 mx-auto" />
+              <div className="text-sm font-bold text-slate-900">
+                No Active Clinic Workspaces Yet
+              </div>
+              <p className="text-xs text-slate-600 max-w-lg mx-auto">
+                Request to join an active veterinary clinic below as a pet owner, accept a staff invitation token, or submit a new clinic organization application for Platform Owner review.
+              </p>
+            </div>
+          )
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {availableWorkspaces.map((ws) => {

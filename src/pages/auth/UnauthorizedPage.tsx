@@ -1,10 +1,26 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ShieldAlert, ArrowLeft } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import { resolvePortalLandingDecision } from '../../utils/workspaceAuth';
 
 export const UnauthorizedPage: React.FC = () => {
   const location = useLocation();
   const state = (location.state || {}) as { reason?: string };
+  const { authStatus, isContextReady, myContext } = useAuth();
+
+  const returnTarget = (() => {
+    if (authStatus === 'authenticated' && isContextReady && myContext) {
+      const decision = resolvePortalLandingDecision(myContext, 'generic');
+      if (decision.kind === 'redirect') {
+        return { to: decision.path, label: 'Return to Authorized Portal' };
+      }
+      if (decision.kind === 'client_pending_status') {
+        return { to: '/login/client', label: 'View Pet Owner Status' };
+      }
+    }
+    return { to: '/', label: 'Back to Pet Connect Home' };
+  })();
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -19,11 +35,11 @@ export const UnauthorizedPage: React.FC = () => {
         </p>
         <div className="pt-2 flex justify-center gap-3">
           <Link
-            to="/workspaces"
+            to={returnTarget.to}
             className="px-4 py-2 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-xl inline-flex items-center gap-1.5"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            Return to My Workspaces
+            {returnTarget.label}
           </Link>
         </div>
       </div>
