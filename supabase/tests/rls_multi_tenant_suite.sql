@@ -4,8 +4,11 @@
 -- File: supabase/tests/rls_multi_tenant_suite.sql
 -- ==============================================================================
 -- EXECUTION REQUIREMENTS:
--- - Run against a local Supabase Postgres / staging database AFTER applying all
---   migrations in supabase/migrations/20261113000000..20261113070000.
+-- - MUST ONLY be run against a dedicated, clean/disposable Supabase Postgres
+--   test database AFTER applying all migrations (20261113000000..20261113140000).
+-- - NEVER run against populated or post-bootstrap staging/production databases.
+--   A fail-closed preflight guard aborts immediately if any platform_admins row
+--   or the real Developer account (inderjeetcode@gmail.com) exists.
 -- - Uses genuine `SET LOCAL ROLE authenticated;` + `request.jwt.claims` so RLS
 --   and GRANT/REVOKE enforcement are NEVER bypassed during assertions.
 -- - Wrapped in BEGIN; ... ROLLBACK; so zero synthetic test rows persist.
@@ -84,6 +87,25 @@ DECLARE
     '90000000-0000-0000-0000-000000000012'::uuid
   ];
 BEGIN
+  -- ---------------------------------------------------------------------------
+  -- FAIL-CLOSED ENVIRONMENT SAFETY GUARD (DISPOSABLE TEST DB REQUIRED)
+  -- ---------------------------------------------------------------------------
+  -- Production safeguards pin app.bootstrap_single_platform_owner() strictly to
+  -- 'inderjeetcode@gmail.com' and allow at most one active Platform Owner row.
+  -- To verify bootstrap behavior without ever touching real staging/prod data
+  -- or weakening production checks, this suite must ONLY run on a clean,
+  -- dedicated disposable database with zero pre-existing governance/Developer state.
+  IF EXISTS (SELECT 1 FROM public.platform_admins) THEN
+    RAISE EXCEPTION 'ABORTED: rls_multi_tenant_suite.sql requires a dedicated disposable database with zero pre-existing public.platform_admins rows (refusing to run against populated or post-bootstrap staging).'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM auth.users WHERE lower(email) = 'inderjeetcode@gmail.com')
+     OR EXISTS (SELECT 1 FROM public.profiles WHERE lower(email) = 'inderjeetcode@gmail.com') THEN
+    RAISE EXCEPTION 'ABORTED: Real Developer account (inderjeetcode@gmail.com) exists in this database. Run rls_multi_tenant_suite.sql only against a dedicated disposable test database to avoid touching real accounts.'
+      USING ERRCODE = '22023';
+  END IF;
+
   -- ---------------------------------------------------------------------------
   -- FIXTURE SETUP (privileged role only for auth.users + platform_admins seed)
   -- ---------------------------------------------------------------------------
@@ -1073,6 +1095,189 @@ BEGIN
     END IF;
   END;
   RAISE NOTICE 'TEST 13 PASSED: Phase 8 core business workflows, concurrency locks, 7-day chat, clinical amendments & notifications verified';
+
+  -- ---------------------------------------------------------------------------
+  -- TEST 14: PHASE 1 — SINGLE PLATFORM OWNER CONSTRAINT & CONTROLLED BOOTSTRAP
+  -- (Disposable database only; guarded above so real Developer/staging rows
+  -- are never inspected, altered, or bootstrapped.)
+  -- ---------------------------------------------------------------------------
+  DECLARE
+    v_dev_email CONSTANT TEXT := 'inderjeetcode@gmail.com';
+    v_synth_bootstrap_uid UUID := '90000000-0000-0000-0000-000000000099'::uuid;
+    v_bootstrap_res JSONB;
+    v_active_owner_count BIGINT;
+    v_hist_inactive_count BIGINT;
+    v_audit_count BIGINT;
+    v_org_mem_count BIGINT;
+  BEGIN
+    -- 14a. Attempting to insert a second active Platform Owner must fail (23505)
+    RESET ROLE;
+    v_err_caught := false;
+    BEGIN
+      INSERT INTO public.platform_admins (user_id, granted_by, is_active, notes)
+      VALUES (v_org_a_owner, v_platform_admin, true, 'Unauthorized 2nd Platform Owner');
+    EXCEPTION WHEN SQLSTATE '23505' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14a FAILED: Second active Platform Owner insert succeeded!';
+    END IF;
+
+    -- 14b. Normal promotion RPC platform_grant_platform_admin & bootstrap are blocked for authenticated & anon roles
+    SET LOCAL ROLE authenticated;
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_platform_admin::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_platform_admin::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.platform_grant_platform_admin(v_org_a_owner, 'Attempt UI grant');
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14b FAILED: Authenticated Platform Owner called platform_grant_platform_admin!';
+    END IF;
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM app.bootstrap_single_platform_owner(v_dev_email, 'Attempt authenticated bootstrap');
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14c FAILED: Authenticated user executed app.bootstrap_single_platform_owner!';
+    END IF;
+
+    SET LOCAL ROLE anon;
+    PERFORM set_config('request.jwt.claims', '{"role":"anon"}'::text, true);
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.jwt.claim.role', 'anon', true);
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM app.bootstrap_single_platform_owner(v_dev_email, 'Attempt anon bootstrap');
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14d FAILED: Anon role executed app.bootstrap_single_platform_owner!';
+    END IF;
+
+    -- 14c. Privileged execution must also reject platform_grant_platform_admin and reject bootstrap while an active owner exists
+    RESET ROLE;
+    PERFORM set_config('request.jwt.claims', '{}', true);
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.jwt.claim.role', '', true);
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.platform_grant_platform_admin(v_org_a_owner, 'Privileged grant disabled');
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14e FAILED: platform_grant_platform_admin remained enabled!';
+    END IF;
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM app.bootstrap_single_platform_owner(v_dev_email, 'Conflict while active owner exists');
+    EXCEPTION WHEN SQLSTATE '23505' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14f FAILED: Bootstrap ran even though active Platform Owner already existed!';
+    END IF;
+
+    -- 14d. Verify DELETE on existing synthetic platform_admins row is blocked (42501)
+    v_err_caught := false;
+    BEGIN
+      DELETE FROM public.platform_admins WHERE user_id = v_platform_admin;
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14g FAILED: DELETE on existing platform_admins fixture row succeeded!';
+    END IF;
+
+    -- Deactivate synthetic fixture owner (preserving historical row) to test bootstrap validation cleanly inside ROLLBACK
+    UPDATE public.platform_admins SET is_active = false WHERE user_id = v_platform_admin;
+
+    -- 14e. Wrong email rejected (42501)
+    v_err_caught := false;
+    BEGIN
+      PERFORM app.bootstrap_single_platform_owner('attacker@example.com', 'Wrong email test');
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14h FAILED: Bootstrap accepted unauthorized email!';
+    END IF;
+
+    -- 14f. Create synthetic disposable Auth user row (never touches any real account) with NULL email_confirmed_at
+    INSERT INTO auth.users (
+      id, instance_id, aud, role, email, encrypted_password,
+      email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at
+    )
+    VALUES (
+      v_synth_bootstrap_uid,
+      '00000000-0000-0000-0000-000000000000'::uuid,
+      'authenticated',
+      'authenticated',
+      v_dev_email,
+      '$2a$10$rlsfixtureplaceholderhash00000000000000000000000000000',
+      NULL,
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      jsonb_build_object('full_name', 'Disposable Bootstrap Fixture'),
+      now(),
+      now()
+    );
+
+    -- Unconfirmed synthetic fixture cannot be bootstrapped (42501)
+    v_err_caught := false;
+    BEGIN
+      PERFORM app.bootstrap_single_platform_owner(v_dev_email, 'Unconfirmed synthetic fixture check');
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14i FAILED: Unconfirmed email fixture was bootstrapped!';
+    END IF;
+
+    -- 14g. Confirm synthetic fixture -> bootstrap succeeds once, resolves exact synthetic UUID, preserves inactive history, logs audit, assigns 0 clinic memberships
+    UPDATE auth.users SET email_confirmed_at = now() WHERE id = v_synth_bootstrap_uid;
+    v_bootstrap_res := app.bootstrap_single_platform_owner(v_dev_email, 'Verified synthetic disposable bootstrap test');
+
+    IF (v_bootstrap_res->>'user_id')::UUID <> v_synth_bootstrap_uid THEN
+      RAISE EXCEPTION 'TEST 14j FAILED: Bootstrap returned unexpected UUID % (expected %)', v_bootstrap_res->>'user_id', v_synth_bootstrap_uid;
+    END IF;
+
+    SELECT count(*) INTO v_active_owner_count FROM public.platform_admins WHERE is_active = true;
+    SELECT count(*) INTO v_hist_inactive_count FROM public.platform_admins WHERE user_id = v_platform_admin AND is_active = false;
+    SELECT count(*) INTO v_audit_count FROM public.audit_logs WHERE action = 'BOOTSTRAP_PLATFORM_OWNER' AND entity_id = v_synth_bootstrap_uid::text;
+    SELECT count(*) INTO v_org_mem_count FROM public.organization_memberships WHERE user_id = v_synth_bootstrap_uid;
+
+    IF v_active_owner_count <> 1 OR v_hist_inactive_count <> 1 OR v_audit_count <> 1 THEN
+      RAISE EXCEPTION 'TEST 14k FAILED: Post-bootstrap counts invalid (active=%, inactive_hist=%, audit=%)',
+        v_active_owner_count, v_hist_inactive_count, v_audit_count;
+    END IF;
+    IF v_org_mem_count <> 0 THEN
+      RAISE EXCEPTION 'TEST 14l FAILED: Bootstrap unexpectedly assigned % clinic memberships to Developer!', v_org_mem_count;
+    END IF;
+
+    -- 14h. Repeated bootstrap rejected (23505)
+    v_err_caught := false;
+    BEGIN
+      PERFORM app.bootstrap_single_platform_owner(v_dev_email, 'Duplicate bootstrap attempt');
+    EXCEPTION WHEN SQLSTATE '23505' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 14m FAILED: Repeated bootstrap execution succeeded!';
+    END IF;
+  END;
+  RAISE NOTICE 'TEST 14 PASSED: Single active Platform Owner constraint, disabled grant RPC & controlled bootstrap verified';
 
   RAISE NOTICE '================================================================';
   RAISE NOTICE 'ALL MULTI-TENANT RLS & HARDENED RPC ASSERTIONS PASSED!';

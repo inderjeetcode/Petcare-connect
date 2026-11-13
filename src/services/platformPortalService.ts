@@ -134,15 +134,6 @@ export const platformPortalService = {
     };
   },
 
-  async grantPlatformAdmin(targetUserId: string, notes?: string): Promise<void> {
-    const client = getClient();
-    const { error } = await client.rpc('platform_grant_platform_admin', {
-      p_target_user_id: targetUserId,
-      p_notes: notes?.trim() || null,
-    });
-    if (error) throw error;
-  },
-
   async revokePlatformAdmin(targetUserId: string, reason: string): Promise<void> {
     const client = getClient();
     const { error } = await client.rpc('platform_revoke_platform_admin', {

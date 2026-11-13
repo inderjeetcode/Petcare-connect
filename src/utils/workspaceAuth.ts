@@ -442,7 +442,7 @@ export function isAuthorizedReturnPath(
 
   if (pathname === '/platform' || pathname.startsWith('/platform/')) {
     if (!context.is_platform_admin) return null;
-    if (portalIntent !== 'platform' && portalIntent !== 'generic') return null;
+    if (portalIntent !== 'platform') return null;
     return normalizedFull;
   }
 
@@ -496,7 +496,7 @@ export function isAuthorizedReturnPath(
     if (portalIntent === 'platform') return null;
     if (portalIntent === 'clinic') return staffWorkspaces.length > 0 ? normalizedFull : null;
     if (portalIntent === 'client') return clientWorkspaces.length > 1 ? normalizedFull : null;
-    return workspaces.length > 0 ? normalizedFull : null;
+    return workspaces.some((w) => w.portal !== 'platform') ? normalizedFull : null;
   }
 
   return null;
@@ -507,7 +507,10 @@ export type PortalLandingDecision =
   | { kind: 'client_pending_status'; clinicClients: MyClinicClient[] }
   | {
       kind: 'denied';
-      reason: 'platform_forbidden' | 'clinic_membership_required';
+      reason:
+        | 'platform_forbidden'
+        | 'platform_login_required'
+        | 'clinic_membership_required';
       message: string;
     };
 
@@ -558,6 +561,8 @@ export function resolvePortalLandingDecision(
     };
   }
 
+  const nonPlatformWorkspaces = workspaces.filter((w) => w.portal !== 'platform');
+
   if (portalIntent === 'client') {
     if (clientWorkspaces.length === 1) {
       return { kind: 'redirect', path: clientWorkspaces[0].default_path };
@@ -565,17 +570,33 @@ export function resolvePortalLandingDecision(
     if (clientWorkspaces.length > 1) {
       return { kind: 'redirect', path: '/workspaces' };
     }
+    if (context.is_platform_admin && clinicClients.length === 0) {
+      return {
+        kind: 'denied',
+        reason: 'platform_login_required',
+        message:
+          'Platform Owner accounts cannot access governance portals from Pet Owner login. Use the dedicated Platform Governance sign-in endpoint.',
+      };
+    }
     return {
       kind: 'client_pending_status',
       clinicClients,
     };
   }
 
-  // Legacy/generic entry (/login, /signup)
-  if (workspaces.length === 1) {
-    return { kind: 'redirect', path: workspaces[0].default_path };
+  // Legacy/generic entry (/login, /signup): never provide a route to Platform Owner access
+  if (context.is_platform_admin && nonPlatformWorkspaces.length === 0) {
+    return {
+      kind: 'denied',
+      reason: 'platform_login_required',
+      message:
+        'Platform Owner access is disabled on generic login and signup routes. Sign out and authenticate at the dedicated Platform Governance sign-in route.',
+    };
   }
-  if (workspaces.length > 1) {
+  if (nonPlatformWorkspaces.length === 1) {
+    return { kind: 'redirect', path: nonPlatformWorkspaces[0].default_path };
+  }
+  if (nonPlatformWorkspaces.length > 1) {
     return { kind: 'redirect', path: '/workspaces' };
   }
   if (

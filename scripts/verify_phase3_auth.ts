@@ -5,6 +5,8 @@ import {
   deriveLegacyPortalRole,
   hasBranchAccess,
   hasOrgPermission,
+  isAuthorizedReturnPath,
+  resolvePortalLandingDecision,
 } from '../src/utils/workspaceAuth';
 import { formatSupabaseError } from '../src/services/authService';
 import type { MyContextResponse } from '../src/types/auth';
@@ -134,9 +136,58 @@ const platformCtx: MyContextResponse = {
 };
 assert.ok(buildWorkspaceOptions(platformCtx).some((w) => w.portal === 'platform'));
 
-// 8. Legacy role derivation & error formatting
+// 8. Phase 1 strict login separation for Platform Owner vs generic/clinic/client entrypoints
+const solePlatformOwnerCtx: MyContextResponse = {
+  user_id: 'dev-owner-1',
+  profile: {
+    id: 'dev-owner-1',
+    full_name: 'Platform Developer',
+    email: 'inderjeetcode@gmail.com',
+    phone: null,
+    avatar_url: null,
+  },
+  is_platform_admin: true,
+  memberships: [],
+  clinic_clients: [],
+};
+
+// Dedicated /platform/login allows Platform Owner to land on /platform/dashboard
+assert.deepEqual(
+  resolvePortalLandingDecision(solePlatformOwnerCtx, 'platform'),
+  { kind: 'redirect', path: '/platform/dashboard' }
+);
+// Generic /login or /signup MUST refuse routing to Platform Owner portal
+assert.deepEqual(
+  resolvePortalLandingDecision(solePlatformOwnerCtx, 'generic'),
+  {
+    kind: 'denied',
+    reason: 'platform_login_required',
+    message:
+      'Platform Owner access is disabled on generic login and signup routes. Sign out and authenticate at the dedicated Platform Governance sign-in route.',
+  }
+);
+// Generic/client/clinic return-path checks never redirect to /platform/*
+assert.equal(isAuthorizedReturnPath(solePlatformOwnerCtx, '/platform/dashboard', 'generic'), null);
+assert.equal(isAuthorizedReturnPath(solePlatformOwnerCtx, '/platform/dashboard', 'client'), null);
+assert.equal(isAuthorizedReturnPath(solePlatformOwnerCtx, '/platform/dashboard', 'clinic'), null);
+assert.equal(
+  isAuthorizedReturnPath(solePlatformOwnerCtx, '/platform/dashboard', 'platform'),
+  '/platform/dashboard'
+);
+
+// Clinic and Pet Owner flows remain fully operational
+assert.deepEqual(
+  resolvePortalLandingDecision(multiOrgContext, 'clinic'),
+  { kind: 'redirect', path: '/workspaces' }
+);
+assert.deepEqual(
+  resolvePortalLandingDecision(multiOrgContext, 'client'),
+  { kind: 'redirect', path: '/oakridge-vet/client/dashboard' }
+);
+
+// 9. Legacy role derivation & error formatting
 assert.equal(deriveLegacyPortalRole(workspaces[0]), 'doctor');
 assert.match(formatSupabaseError({ code: '28000', message: 'Unauthorized' }), /expired|unauthenticated/i);
 assert.match(formatSupabaseError({ code: '23505', message: 'duplicate key value violates unique constraint slug' }), /slug/i);
 
-console.log('ALL PHASE 3 AUTH & WORKSPACE UNIT ASSERTIONS PASSED (8/8 groups)');
+console.log('ALL PHASE 3 AUTH & WORKSPACE UNIT ASSERTIONS PASSED (9/9 groups)');

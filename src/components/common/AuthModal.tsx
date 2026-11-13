@@ -26,6 +26,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
 
   const resolveModalPath = () => {
     if (!myContext) return '/login/client';
+    if (myContext.is_platform_admin) return '/platform/dashboard';
     const decision = resolvePortalLandingDecision(myContext, 'generic');
     return decision.kind === 'redirect' ? decision.path : '/login/client';
   };
@@ -123,13 +124,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           <div className="p-6">
             <AuthFormCard
               onSuccess={(ctx) => {
-                showToast('Signed in successfully.', 'success');
                 onClose();
                 if (!ctx) {
+                  showToast('Signed in successfully.', 'success');
                   navigate('/login/client');
                   return;
                 }
                 const decision = resolvePortalLandingDecision(ctx, 'generic');
+                if (decision.kind === 'denied') {
+                  showToast(decision.message, 'error');
+                  navigate('/login');
+                  return;
+                }
+                showToast('Signed in successfully.', 'success');
                 navigate(
                   decision.kind === 'redirect' ? decision.path : '/login/client'
                 );

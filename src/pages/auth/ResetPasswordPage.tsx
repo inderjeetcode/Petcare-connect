@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 export const ResetPasswordPage: React.FC = () => {
-  const { authStatus, session, updatePassword } = useAuth();
+  const { authStatus, session, isPlatformAdmin, updatePassword } = useAuth();
   const navigate = useNavigate();
 
   const [password, setPassword] = useState('');
@@ -41,7 +41,9 @@ export const ResetPasswordPage: React.FC = () => {
       await updatePassword(password);
       setCompleted(true);
       setTimeout(() => {
-        navigate('/workspaces', { replace: true });
+        navigate(isPlatformAdmin ? '/platform/dashboard' : '/workspaces', {
+          replace: true,
+        });
       }, 1200);
     } catch (err) {
       setErrorMessage(formatSupabaseError(err, 'Failed to update password.'));

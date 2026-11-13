@@ -22,6 +22,7 @@ export const LandingPage: React.FC = () => {
     authStatus === 'authenticated' && isContextReady && Boolean(myContext);
   const continuePath = (() => {
     if (!isAuthenticated || !myContext) return '/login/client';
+    if (myContext.is_platform_admin) return '/platform/dashboard';
     const decision = resolvePortalLandingDecision(myContext, 'generic');
     if (decision.kind === 'redirect') return decision.path;
     return '/login/client';

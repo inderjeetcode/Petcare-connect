@@ -5,7 +5,6 @@ import { platformPortalService } from '../../services/platformPortalService';
 import { formatSupabaseError } from '../../services/authService';
 import { PlatformAuditLogRecord, PlatformUserRecord } from '../../types/platform';
 import {
-  validatePlatformAdminGrant,
   validatePlatformAdminRevoke,
   validatePlatformUserSuspension,
 } from '../../utils/platformPortalHelpers';
@@ -15,7 +14,6 @@ import { Modal } from '../../components/common/Modal';
 import { Pagination } from '../../components/common/Pagination';
 import { PlatformPrivacyBanner } from '../../components/platform/PlatformPrivacyBanner';
 import {
-  CheckCircle2,
   History,
   Loader2,
   RefreshCw,
@@ -42,10 +40,6 @@ export const PlatformUsersPage: React.FC = () => {
   const [pageSize, setPageSize] = useState(25);
   const [loading, setLoading] = useState(true);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
-
-  // Grant Platform Owner modal
-  const [grantTarget, setGrantTarget] = useState<PlatformUserRecord | null>(null);
-  const [grantNotes, setGrantNotes] = useState('');
 
   // Revoke Platform Owner modal
   const [revokeTarget, setRevokeTarget] = useState<PlatformUserRecord | null>(null);
@@ -94,35 +88,6 @@ export const PlatformUsersPage: React.FC = () => {
     () => users.filter((u) => u.platform_status === 'suspended').length,
     [users]
   );
-
-  const handleGrantAdmin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!grantTarget) return;
-    const validationErr = validatePlatformAdminGrant(grantTarget);
-    if (validationErr) {
-      showToast(validationErr, 'warning');
-      return;
-    }
-
-    setBusyUserId(grantTarget.id);
-    try {
-      await platformPortalService.grantPlatformAdmin(
-        grantTarget.id,
-        grantNotes.trim() || undefined
-      );
-      showToast(
-        `Granted Platform Owner role to ${grantTarget.full_name} (${grantTarget.email}).`,
-        'success'
-      );
-      setGrantTarget(null);
-      setGrantNotes('');
-      await Promise.all([loadUsers(), refreshContext()]);
-    } catch (err) {
-      showToast(formatSupabaseError(err, 'Failed to grant Platform Owner role.'), 'error');
-    } finally {
-      setBusyUserId(null);
-    }
-  };
 
   const handleRevokeAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,7 +191,7 @@ export const PlatformUsersPage: React.FC = () => {
     <div className="space-y-6 max-w-7xl mx-auto">
       <PageHeader
         title="Platform User & Role Administration"
-        subtitle="Administer platform-level accounts, explicitly grant or revoke Platform Owner governance roles, and inspect user governance audit trails."
+        subtitle="Inspect platform-level accounts, review the sole active Platform Owner status, administer user account holds, and inspect governance audit trails."
         action={
           <button
             type="button"
@@ -242,12 +207,12 @@ export const PlatformUsersPage: React.FC = () => {
 
       <PlatformPrivacyBanner compact />
 
-      {/* Explicit Role Boundary Notice */}
+      {/* Explicit Single Platform Owner Boundary Notice */}
       <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950 flex items-start gap-3">
         <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
         <div>
-          <span className="font-bold">Zero Automatic Global Admin Escalation: </span>
-          Platform Owner roles are never granted automatically on signup, invitation, or clinic onboarding. Every grant, revocation, or account suspension requires an explicit authorized action, protects against self-lockout or removing the last active Platform Owner, and records an immutable audit log.
+          <span className="font-bold">Single Active Platform Owner Policy: </span>
+          Pet Connect enforces at most one active Platform Owner provisioned exclusively through a controlled, verified, one-time database bootstrap. Normal signup, clinic onboarding, and UI promotion paths cannot grant Platform Owner privileges, and historical role records are preserved for auditing.
         </div>
       </div>
 
@@ -263,7 +228,7 @@ export const PlatformUsersPage: React.FC = () => {
           label="Active Platform Owners"
           value={activePlatformAdminCount}
           icon={ShieldCheck}
-          description="Explicitly authorized governance holders"
+          description="Single-owner controlled bootstrap policy"
         />
         <MetricCard
           label="Suspended Accounts"
@@ -380,6 +345,12 @@ export const PlatformUsersPage: React.FC = () => {
                               </div>
                             )}
                           </div>
+                        ) : u.has_platform_admin_record ? (
+                          <div>
+                            <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold uppercase">
+                              Inactive Owner History
+                            </span>
+                          </div>
                         ) : (
                           <span className="text-slate-500">Standard Account</span>
                         )}
@@ -413,21 +384,6 @@ export const PlatformUsersPage: React.FC = () => {
                           <History className="w-3.5 h-3.5" />
                           Audit
                         </button>
-
-                        {!u.is_platform_admin && u.platform_status === 'active' && (
-                          <button
-                            type="button"
-                            disabled={isBusy}
-                            onClick={() => {
-                              setGrantTarget(u);
-                              setGrantNotes('');
-                            }}
-                            className="px-2.5 py-1.5 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg inline-flex items-center gap-1"
-                          >
-                            <ShieldCheck className="w-3.5 h-3.5" />
-                            Grant Owner
-                          </button>
-                        )}
 
                         {u.is_platform_admin && !isSelf && (
                           <button
@@ -495,51 +451,6 @@ export const PlatformUsersPage: React.FC = () => {
           itemLabel="accounts"
         />
       </div>
-
-      {/* Grant Platform Owner Modal */}
-      <Modal
-        isOpen={Boolean(grantTarget)}
-        onClose={() => setGrantTarget(null)}
-        title={`Grant Platform Owner Role: ${grantTarget?.full_name || ''}`}
-        subtitle="Explicitly grants platform governance privileges. Does NOT grant unrestricted access to tenant medical records or chats."
-        maxWidth="md"
-      >
-        <form onSubmit={handleGrantAdmin} className="space-y-4 text-xs">
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-            <div className="font-bold text-slate-900">{grantTarget?.full_name}</div>
-            <div className="font-mono text-slate-500">{grantTarget?.email}</div>
-          </div>
-          <div>
-            <label className="block font-bold text-slate-700 mb-1">
-              Authorization Notes (Optional)
-            </label>
-            <textarea
-              rows={3}
-              value={grantNotes}
-              onChange={(e) => setGrantNotes(e.target.value)}
-              placeholder="Ticket or governance approval reference..."
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setGrantTarget(null)}
-              className="px-4 py-2 font-semibold text-slate-700 bg-slate-100 rounded-xl"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={Boolean(busyUserId)}
-              className="px-4 py-2 font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-xl inline-flex items-center gap-1.5"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              Confirm Role Grant
-            </button>
-          </div>
-        </form>
-      </Modal>
 
       {/* Revoke Platform Owner Modal */}
       <Modal

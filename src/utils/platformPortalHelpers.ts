@@ -38,6 +38,7 @@ export const PLATFORM_PERMITTED_AUDIT_ACTIONS = new Set<string>([
   'REACTIVATE_ORGANIZATION',
   'ACTIVATE_ORGANIZATION',
   'PLATFORM_UPDATE_ORG_METADATA',
+  'BOOTSTRAP_PLATFORM_OWNER',
   'GRANT_PLATFORM_ADMIN',
   'REVOKE_PLATFORM_ADMIN',
   'PLATFORM_SUSPEND_USER',
@@ -97,15 +98,9 @@ export function validatePlatformOrgTransition(
 }
 
 export function validatePlatformAdminGrant(
-  targetUser: Pick<PlatformUserRecord, 'id' | 'is_platform_admin' | 'platform_status'>
+  _targetUser: Pick<PlatformUserRecord, 'id' | 'is_platform_admin' | 'platform_status'>
 ): string | null {
-  if (targetUser.platform_status !== 'active') {
-    return 'Cannot grant Platform Owner role to a suspended account. Reactivate the user first.';
-  }
-  if (targetUser.is_platform_admin) {
-    return 'This user already holds an active Platform Owner role.';
-  }
-  return null;
+  return 'Normal Platform Owner promotion is disabled under the single active Platform Owner policy.';
 }
 
 export function validatePlatformAdminRevoke(params: {

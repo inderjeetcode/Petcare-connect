@@ -101,8 +101,8 @@ function testPlatformRoleBoundaries() {
     platform_status: 'suspended',
   };
 
-  // Grant validation
-  assert.equal(validatePlatformAdminGrant(activeStandardUser), null);
+  // Grant validation fails closed under the single active Platform Owner policy
+  assert.notEqual(validatePlatformAdminGrant(activeStandardUser), null);
   assert.notEqual(validatePlatformAdminGrant(activeAdminUser), null);
   assert.notEqual(validatePlatformAdminGrant(suspendedUser), null);
 
@@ -274,6 +274,7 @@ function testPrivacyPreservingAggregationAndAuditFilter() {
   // Governance audit events are permitted
   assert.equal(isPlatformAuditEventPermitted('APPROVE_ORG_APPLICATION', 'org-1'), true);
   assert.equal(isPlatformAuditEventPermitted('SUSPEND_ORGANIZATION', 'org-1'), true);
+  assert.equal(isPlatformAuditEventPermitted('BOOTSTRAP_PLATFORM_OWNER', null), true);
   assert.equal(isPlatformAuditEventPermitted('GRANT_PLATFORM_ADMIN', null), true);
   assert.equal(isPlatformAuditEventPermitted('SUPPORT_ACCESS_VIEWED', 'org-1'), true);
 
@@ -386,6 +387,12 @@ function testSqlAndFrontendPrivilegeBoundaries() {
   // Verify AppContext includes explicit platform portal isolation branch
   const appCtx = fs.readFileSync(path.join(root, 'src/context/AppContext.tsx'), 'utf8');
   assert.match(appCtx, /activeWorkspace\?\.portal === 'platform'/);
+
+  // Verify Grant Owner UI and service promotion path were removed in Phase 1
+  const usersPage = fs.readFileSync(path.join(root, 'src/pages/platform/PlatformUsersPage.tsx'), 'utf8');
+  assert.equal(/Grant Owner/i.test(usersPage), false, 'Grant Owner UI button must remain removed');
+  const platformService = fs.readFileSync(path.join(root, 'src/services/platformPortalService.ts'), 'utf8');
+  assert.equal(/grantPlatformAdmin/.test(platformService), false, 'grantPlatformAdmin service wrapper must remain removed');
 
   // Verify Phase 7 SQL migration invariants
   const sqlPath = path.join(

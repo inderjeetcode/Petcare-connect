@@ -386,11 +386,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
     if (decision.kind === 'denied') {
       const isPlatformDenied = decision.reason === 'platform_forbidden';
+      const isPlatformLoginRequired = decision.reason === 'platform_login_required';
       return (
         <div className="min-h-screen bg-slate-50 flex flex-col justify-center items-center p-4 sm:p-6">
           <div className="w-full max-w-md bg-white rounded-2xl border border-rose-200 shadow-sm p-6 space-y-4 text-center">
             <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-700 border border-rose-200 flex items-center justify-center mx-auto">
-              {isPlatformDenied ? (
+              {isPlatformDenied || isPlatformLoginRequired ? (
                 <ShieldAlert className="w-6 h-6" />
               ) : (
                 <XCircle className="w-6 h-6" />
@@ -400,6 +401,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({
               <h1 className="text-lg font-bold text-slate-900">
                 {isPlatformDenied
                   ? 'Platform Governance Access Denied'
+                  : isPlatformLoginRequired
+                  ? 'Dedicated Platform Sign-In Required'
                   : 'Clinic Staff Membership Required'}
               </h1>
               <p className="text-xs text-slate-600 leading-relaxed">
@@ -412,7 +415,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
             </div>
 
             <div className="flex flex-col gap-2 pt-2">
-              {!isPlatformDenied && (
+              {!isPlatformDenied && !isPlatformLoginRequired && (
                 <>
                   <Link
                     to="/login/client"
