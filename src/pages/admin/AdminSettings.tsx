@@ -16,21 +16,25 @@ import {
   ClinicServiceCategory,
   ClinicServiceItem,
 } from '../../types/admin';
+import { PlatformSupportGrant } from '../../types/platform';
 import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
 import {
   Building2,
   Check,
   Edit3,
+  KeyRound,
   Loader2,
   Lock,
   Plus,
   RefreshCw,
   Settings,
+  ShieldCheck,
   Stethoscope,
+  XCircle,
 } from 'lucide-react';
 
-type SettingsTab = 'services' | 'organization' | 'branches';
+type SettingsTab = 'services' | 'organization' | 'branches' | 'support';
 
 export const AdminSettings: React.FC = () => {
   const { workspace } = useAdminWorkspace();
@@ -44,6 +48,9 @@ export const AdminSettings: React.FC = () => {
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [services, setServices] = useState<ClinicServiceItem[]>([]);
+  const [supportGrants, setSupportGrants] = useState<PlatformSupportGrant[]>([]);
+  const [rejectGrantTarget, setRejectGrantTarget] = useState<PlatformSupportGrant | null>(null);
+  const [rejectGrantReason, setRejectGrantReason] = useState('');
 
   // Service filter & modal
   const [serviceFilterCategory, setServiceFilterCategory] = useState<string>('all');
@@ -97,14 +104,18 @@ export const AdminSettings: React.FC = () => {
     if (!orgId) return;
     setLoading(true);
     try {
-      const [org, branchList, serviceList] = await Promise.all([
+      const [org, branchList, serviceList, grantsList] = await Promise.all([
         adminPortalService.getOrganization(orgId),
         onboardingService.getOrgBranches(orgId),
         adminPortalService.getClinicServices(orgId),
+        workspace?.canManageOrg
+          ? adminPortalService.listSupportGrants(orgId).catch(() => [])
+          : Promise.resolve([]),
       ]);
       setOrganization(org);
       setBranches(branchList);
       setServices(serviceList);
+      setSupportGrants(grantsList);
 
       if (org) {
         const ops = org.operational_settings || {};
@@ -127,7 +138,7 @@ export const AdminSettings: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [orgId, showToast]);
+  }, [orgId, workspace?.canManageOrg, showToast]);
 
   useEffect(() => {
     loadData();
@@ -315,6 +326,58 @@ export const AdminSettings: React.FC = () => {
     }
   };
 
+  const handleApproveSupportGrant = async (grant: PlatformSupportGrant) => {
+    setSaving(true);
+    try {
+      await adminPortalService.approveSupportGrant(grant.id);
+      showToast(
+        `Approved time-limited (${grant.duration_minutes}m) ${grant.scope} support access.`,
+        'success'
+      );
+      await loadData();
+    } catch (err) {
+      showToast(formatSupabaseError(err, 'Failed to approve support access.'), 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRejectSupportGrant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectGrantTarget || !rejectGrantReason.trim()) return;
+    setSaving(true);
+    try {
+      await adminPortalService.rejectSupportGrant(
+        rejectGrantTarget.id,
+        rejectGrantReason.trim()
+      );
+      showToast('Rejected support access request.', 'info');
+      setRejectGrantTarget(null);
+      setRejectGrantReason('');
+      await loadData();
+    } catch (err) {
+      showToast(formatSupabaseError(err, 'Failed to reject support access.'), 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRevokeSupportGrant = async (grant: PlatformSupportGrant) => {
+    setSaving(true);
+    try {
+      await adminPortalService.revokeSupportGrant(
+        grant.id,
+        'Revoked by Organization Owner'
+      );
+      showToast('Support access grant revoked immediately.', 'info');
+      await loadData();
+    } catch (err) {
+      showToast(formatSupabaseError(err, 'Failed to revoke support access.'), 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-6xl">
       <PageHeader
@@ -377,6 +440,18 @@ export const AdminSettings: React.FC = () => {
           <Building2 className="w-4 h-4" />
           Branch Operational Rules ({branches.length})
         </button>
+        {workspace?.canManageOrg && (
+          <button
+            type="button"
+            onClick={() => setTab('support')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap ${
+              tab === 'support' ? 'bg-teal-700 text-white' : 'text-slate-600 hover:bg-slate-100'
+            }`}
+          >
+            <KeyRound className="w-4 h-4" />
+            Platform Support Access ({supportGrants.filter((g) => g.status === 'requested').length} pending)
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -675,7 +750,7 @@ export const AdminSettings: React.FC = () => {
             </div>
           )}
         </form>
-      ) : (
+      ) : tab === 'branches' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           {branches.map((branch) => {
             const s = branch.settings || {};
@@ -737,7 +812,106 @@ export const AdminSettings: React.FC = () => {
             );
           })}
         </div>
-      )}
+      ) : tab === 'support' ? (
+        <div className="space-y-4 text-xs">
+          <div className="p-4 rounded-xl bg-teal-50 border border-teal-200 text-teal-900">
+            <strong>Explicit Organization Owner Authorization:</strong> Platform Owners never hold automatic access to your clinic workspace. Time-limited diagnostic grants approved here exclude private medical records, prescriptions, vaccinations, clinical notes, and consultation chats.
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                <tr>
+                  <th className="py-3 px-4">Requested By</th>
+                  <th className="py-3 px-4">Scope & Reason</th>
+                  <th className="py-3 px-4">Duration / Expiry</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4 text-right">Owner Decision</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {supportGrants.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-10 text-center text-slate-500">
+                      No Platform Owner support access requests have been submitted for this organization.
+                    </td>
+                  </tr>
+                ) : (
+                  supportGrants.map((grant) => (
+                    <tr key={grant.id} className="hover:bg-slate-50/50">
+                      <td className="py-3 px-4 font-mono text-slate-700">
+                        {grant.platform_admin_email || grant.platform_admin_user_id}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="font-mono font-bold text-slate-900">{grant.scope}</div>
+                        <div className="text-slate-600 max-w-md">{grant.reason}</div>
+                      </td>
+                      <td className="py-3 px-4 text-slate-600">
+                        <div>{grant.duration_minutes} minutes</div>
+                        {grant.expires_at && (
+                          <div className="text-[11px] text-slate-500">
+                            Expires: {new Date(grant.expires_at).toLocaleString()}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            grant.status === 'approved'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : grant.status === 'requested'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {grant.status}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5">
+                        {grant.status === 'requested' && (
+                          <>
+                            <button
+                              type="button"
+                              disabled={saving}
+                              onClick={() => handleApproveSupportGrant(grant)}
+                              className="px-2.5 py-1 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-lg inline-flex items-center gap-1"
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              disabled={saving}
+                              onClick={() => {
+                                setRejectGrantTarget(grant);
+                                setRejectGrantReason('');
+                              }}
+                              className="px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg inline-flex items-center gap-1"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </>
+                        )}
+                        {grant.status === 'approved' && (
+                          <button
+                            type="button"
+                            disabled={saving}
+                            onClick={() => handleRevokeSupportGrant(grant)}
+                            className="px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg"
+                          >
+                            Revoke Access
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
 
       {/* Service Create / Edit Modal */}
       <Modal
@@ -955,6 +1129,45 @@ export const AdminSettings: React.FC = () => {
               className="px-4 py-2 font-bold text-white bg-teal-700 rounded-lg"
             >
               Save Branch Rules
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Reject Support Access Modal */}
+      <Modal
+        isOpen={Boolean(rejectGrantTarget)}
+        onClose={() => setRejectGrantTarget(null)}
+        title="Reject Platform Support Request"
+        subtitle="Provide a clear reason for declining this support access request."
+        maxWidth="md"
+      >
+        <form onSubmit={handleRejectSupportGrant} className="space-y-3.5 text-xs">
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">Rejection Reason *</label>
+            <textarea
+              required
+              rows={3}
+              value={rejectGrantReason}
+              onChange={(e) => setRejectGrantReason(e.target.value)}
+              placeholder="Diagnostic window no longer needed..."
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setRejectGrantTarget(null)}
+              className="px-4 py-2 font-semibold text-slate-700 bg-slate-100 rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-4 py-2 font-bold text-white bg-rose-700 hover:bg-rose-800 rounded-lg"
+            >
+              Confirm Rejection
             </button>
           </div>
         </form>

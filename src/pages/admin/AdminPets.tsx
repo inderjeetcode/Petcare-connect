@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
+import { Pagination } from '../../components/common/Pagination';
 import { useAdminWorkspace } from '../../hooks/useAdminWorkspace';
 import { useApp } from '../../context/AppContext';
 import { onboardingService } from '../../services/onboardingService';
@@ -8,6 +9,12 @@ import { adminPortalService } from '../../services/adminPortalService';
 import { formatSupabaseError } from '../../services/authService';
 import { ClinicClientRecord } from '../../types/auth';
 import { AdminPetDirectoryItem } from '../../types/admin';
+import {
+  compareIsoDates,
+  compareStrings,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   Edit2,
   Eye,
@@ -29,6 +36,10 @@ export const AdminPets: React.FC = () => {
   const [includeArchived, setIncludeArchived] = useState(false);
   const [speciesFilter, setSpeciesFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState<'created_at' | 'name' | 'visits'>('created_at');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const [selectedPet, setSelectedPet] = useState<AdminPetDirectoryItem | null>(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -69,25 +80,49 @@ export const AdminPets: React.FC = () => {
     void loadData();
   }, [loadData]);
 
-  if (!workspace) return null;
+  useEffect(() => {
+    setPage(1);
+  }, [includeArchived, speciesFilter, search, sortBy, sortOrder]);
 
-  const approvedClients = clients.filter((c) => c.status === 'approved');
-  const speciesOptions = Array.from(
-    new Set(pets.map((p) => p.species).filter(Boolean))
-  ).sort();
+  const approvedClients = useMemo(
+    () => clients.filter((c) => c.status === 'approved'),
+    [clients]
+  );
+  const speciesOptions = useMemo(
+    () => Array.from(new Set(pets.map((p) => p.species).filter(Boolean))).sort(),
+    [pets]
+  );
 
-  const filtered = pets.filter((pet) => {
-    if (speciesFilter !== 'all' && pet.species !== speciesFilter) return false;
+  const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return true;
-    const guardianNames = pet.guardians.map((g) => g.client_name.toLowerCase()).join(' ');
-    return (
-      pet.name.toLowerCase().includes(q) ||
-      pet.breed.toLowerCase().includes(q) ||
-      pet.species.toLowerCase().includes(q) ||
-      guardianNames.includes(q)
+    const list = pets.filter((pet) => {
+      if (speciesFilter !== 'all' && pet.species !== speciesFilter) return false;
+      if (!q) return true;
+      const guardianNames = pet.guardians.map((g) => g.client_name.toLowerCase()).join(' ');
+      return (
+        pet.name.toLowerCase().includes(q) ||
+        pet.breed.toLowerCase().includes(q) ||
+        pet.species.toLowerCase().includes(q) ||
+        guardianNames.includes(q)
+      );
+    });
+    return sortItems(
+      list,
+      (a, b) => {
+        if (sortBy === 'name') return compareStrings(a.name, b.name);
+        if (sortBy === 'visits') return (a.appointment_count || 0) - (b.appointment_count || 0);
+        return compareIsoDates(a.created_at, b.created_at);
+      },
+      sortOrder
     );
-  });
+  }, [pets, speciesFilter, search, sortBy, sortOrder]);
+
+  const paginatedPets = useMemo(
+    () => paginateItems(filtered, page, pageSize),
+    [filtered, page, pageSize]
+  );
+
+  if (!workspace) return null;
 
   const openAddPet = () => {
     setEditingPet(null);
@@ -178,6 +213,7 @@ export const AdminPets: React.FC = () => {
         action={
           <div className="flex items-center gap-2 flex-wrap">
             <button
+              type="button"
               onClick={() => void loadData()}
               disabled={loading}
               className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
@@ -187,6 +223,7 @@ export const AdminPets: React.FC = () => {
             </button>
             {workspace.canWritePets && approvedClients.length > 0 && (
               <button
+                type="button"
                 onClick={openAddPet}
                 className="px-4 py-2 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
               >
@@ -211,10 +248,11 @@ export const AdminPets: React.FC = () => {
           />
         </div>
 
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
           <select
             value={speciesFilter}
             onChange={(e) => setSpeciesFilter(e.target.value)}
+            aria-label="Filter pets by species"
             className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white"
           >
             <option value="all">All Species ({pets.length})</option>
@@ -225,7 +263,23 @@ export const AdminPets: React.FC = () => {
             ))}
           </select>
 
-          <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+          <select
+            value={`${sortBy}:${sortOrder}`}
+            onChange={(e) => {
+              const [by, dir] = e.target.value.split(':') as ['created_at' | 'name' | 'visits', 'asc' | 'desc'];
+              setSortBy(by);
+              setSortOrder(dir);
+            }}
+            aria-label="Sort pets"
+            className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+          >
+            <option value="created_at:desc">Recently Registered</option>
+            <option value="name:asc">Pet Name (A–Z)</option>
+            <option value="name:desc">Pet Name (Z–A)</option>
+            <option value="visits:desc">Most Visits</option>
+          </select>
+
+          <label className="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer px-1">
             <input
               type="checkbox"
               checked={includeArchived}
@@ -237,7 +291,7 @@ export const AdminPets: React.FC = () => {
       </div>
 
       {/* Pet Directory Table */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="p-10 text-center">
             <Loader2 className="w-6 h-6 text-teal-700 animate-spin mx-auto mb-2" />
@@ -252,6 +306,7 @@ export const AdminPets: React.FC = () => {
             </p>
           </div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
               <tr>
@@ -265,7 +320,7 @@ export const AdminPets: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((pet) => (
+              {paginatedPets.items.map((pet) => (
                 <tr key={pet.id} className="hover:bg-slate-50/70">
                   <td className="py-3 px-4">
                     <div className="font-bold text-slate-900">{pet.name}</div>
@@ -329,6 +384,21 @@ export const AdminPets: React.FC = () => {
               ))}
             </tbody>
           </table>
+          <Pagination
+            currentPage={paginatedPets.currentPage}
+            totalPages={paginatedPets.totalPages}
+            totalItems={paginatedPets.totalItems}
+            startIndex={paginatedPets.startIndex}
+            endIndex={paginatedPets.endIndex}
+            pageSize={paginatedPets.pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            itemLabel="pets"
+          />
+          </div>
         )}
       </div>
 

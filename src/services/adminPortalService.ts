@@ -20,6 +20,7 @@ import {
   ClinicServiceCategory,
   ClinicServiceItem,
 } from '../types/admin';
+import { PlatformSupportGrant } from '../types/platform';
 import {
   ClientMedicalRecord,
   ClientPet,
@@ -301,13 +302,14 @@ export const adminPortalService = {
       .from('appointments')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('requested_start', { ascending: false });
+      .order('requested_start', { ascending: false })
+      .limit(500);
 
     if (branchFilterIds && branchFilterIds.length > 0) {
       query = query.in('branch_id', branchFilterIds);
     }
 
-    const [apptRes, branches, doctors, clients, petsRes, consRes] = await Promise.all([
+    const [apptRes, branches, doctors, clients, petsRes, consRes, svcRes] = await Promise.all([
       query,
       onboardingService.getOrgBranches(organizationId),
       onboardingService.getOrgDoctors(organizationId),
@@ -321,16 +323,22 @@ export const adminPortalService = {
         .select('id, appointment_id, consultation_status')
         .eq('organization_id', organizationId)
         .not('appointment_id', 'is', null),
+      client
+        .from('clinic_services')
+        .select('id, name, duration_minutes')
+        .eq('organization_id', organizationId),
     ]);
 
     if (apptRes.error) throw apptRes.error;
     if (petsRes.error) throw petsRes.error;
     if (consRes.error) throw consRes.error;
+    if (svcRes.error && svcRes.error.code !== '42P01') throw svcRes.error;
 
     const branchMap = new Map(branches.map((b) => [b.id, b]));
     const docMap = new Map(doctors.map((d) => [d.id, d]));
     const clientMap = new Map(clients.map((c) => [c.id, c]));
     const petMap = new Map(((petsRes.data || []) as any[]).map((p) => [p.id, p]));
+    const svcMap = new Map(((svcRes.data || []) as any[]).map((s) => [s.id, s]));
     const consByAppt = new Map<string, { id: string; consultation_status: string }>();
     for (const c of (consRes.data || []) as any[]) {
       if (c.appointment_id && c.consultation_status !== 'rejected') {
@@ -344,6 +352,7 @@ export const adminPortalService = {
       const doc = docMap.get(row.doctor_profile_id);
       const cc = clientMap.get(row.clinic_client_id);
       const pet = petMap.get(row.pet_id);
+      const svc = row.service_id ? svcMap.get(row.service_id) : undefined;
       const linkedCons = consByAppt.get(row.id);
 
       return {
@@ -353,6 +362,9 @@ export const adminPortalService = {
         clinic_client_id: row.clinic_client_id,
         pet_id: row.pet_id,
         doctor_profile_id: row.doctor_profile_id,
+        service_id: row.service_id || null,
+        service_name: svc?.name || null,
+        service_duration_minutes: svc?.duration_minutes ? Number(svc.duration_minutes) : null,
         requested_start: row.requested_start,
         requested_end: row.requested_end,
         scheduled_range: row.scheduled_range || null,
@@ -391,7 +403,8 @@ export const adminPortalService = {
         .from('consultations')
         .select('*')
         .eq('organization_id', organizationId)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(500),
       onboardingService.getOrgBranches(organizationId),
       onboardingService.getOrgDoctors(organizationId),
       onboardingService.getOrgClinicClients(organizationId),
@@ -458,7 +471,8 @@ export const adminPortalService = {
     organizationId: string,
     branchId: string,
     doctorProfileId: string,
-    date: string
+    date: string,
+    serviceId?: string | null
   ): Promise<DoctorAvailableSlot[]> {
     const client = getClient();
     const { data, error } = await client.rpc('get_available_slots', {
@@ -466,6 +480,7 @@ export const adminPortalService = {
       p_branch_id: branchId,
       p_doctor_profile_id: doctorProfileId,
       p_date: date,
+      p_service_id: serviceId ?? null,
     });
     if (error) throw error;
     return (data || []) as DoctorAvailableSlot[];
@@ -476,6 +491,7 @@ export const adminPortalService = {
     confirmed_start?: string | null;
     confirmed_end?: string | null;
     doctor_profile_id?: string | null;
+    service_id?: string | null;
   }): Promise<void> {
     const client = getClient();
     const { error } = await client.rpc('confirm_appointment', {
@@ -483,8 +499,25 @@ export const adminPortalService = {
       p_confirmed_start: params.confirmed_start ?? null,
       p_confirmed_end: params.confirmed_end ?? null,
       p_doctor_profile_id: params.doctor_profile_id ?? null,
+      p_service_id: params.service_id ?? null,
     });
     if (error) throw error;
+  },
+
+  async expireDueConsultations(
+    organizationId: string,
+    consultationId?: string
+  ): Promise<number> {
+    const client = getClient();
+    const { data, error } = await client.rpc('expire_due_consultations', {
+      p_organization_id: organizationId,
+      p_consultation_id: consultationId ?? null,
+    });
+    if (error) {
+      if (error.code === '42883') return 0;
+      throw error;
+    }
+    return Number(data || 0);
   },
 
   async declineAppointment(appointmentId: string, reason: string): Promise<void> {
@@ -804,7 +837,8 @@ export const adminPortalService = {
         .from('consultation_payments')
         .select('*')
         .eq('organization_id', organizationId)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(500),
       adminPortalService.getConsultations(organizationId).catch(() => []),
     ]);
 
@@ -843,12 +877,14 @@ export const adminPortalService = {
         .from('medical_records')
         .select('*')
         .eq('organization_id', organizationId)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(500),
       client
         .from('prescriptions')
         .select('*')
         .eq('organization_id', organizationId)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(500),
       client
         .from('prescription_items')
         .select('*')
@@ -903,12 +939,40 @@ export const adminPortalService = {
     const { data, error } = await client
       .from('notifications')
       .select('*')
-      .eq('organization_id', organizationId)
       .eq('user_id', userId)
+      .or(`organization_id.eq.${organizationId},organization_id.is.null`)
       .order('created_at', { ascending: false })
-      .limit(40);
+      .limit(150);
     if (error) throw error;
     return (data || []) as DoctorNotification[];
+  },
+
+  async setNotificationReadStatus(
+    notificationId: string,
+    userId: string,
+    isRead: boolean
+  ): Promise<void> {
+    const client = getClient();
+    const { error } = await client
+      .from('notifications')
+      .update({ is_read: isRead })
+      .eq('id', notificationId)
+      .eq('user_id', userId);
+    if (error) throw error;
+  },
+
+  async markAllNotificationsRead(
+    organizationId: string,
+    userId: string
+  ): Promise<void> {
+    const client = getClient();
+    const { error } = await client
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('user_id', userId)
+      .eq('is_read', false)
+      .or(`organization_id.eq.${organizationId},organization_id.is.null`);
+    if (error) throw error;
   },
 
   async getOperationalOverview(params: {
@@ -978,5 +1042,47 @@ export const adminPortalService = {
       auditLogs,
       payments,
     };
+  },
+
+  // ---------------------------------------------------------------------------
+  // EXPLICIT PLATFORM SUPPORT ACCESS APPROVALS (ORG OWNER ONLY)
+  // ---------------------------------------------------------------------------
+
+  async listSupportGrants(organizationId: string): Promise<PlatformSupportGrant[]> {
+    const client = getClient();
+    const { data, error } = await client.rpc('platform_list_support_grants', {
+      p_organization_id: organizationId,
+    });
+    if (error) {
+      if (error.code === '42883') return [];
+      throw error;
+    }
+    return (Array.isArray(data) ? data : []) as PlatformSupportGrant[];
+  },
+
+  async approveSupportGrant(grantId: string): Promise<void> {
+    const client = getClient();
+    const { error } = await client.rpc('approve_platform_support_access', {
+      p_grant_id: grantId,
+    });
+    if (error) throw error;
+  },
+
+  async rejectSupportGrant(grantId: string, reason: string): Promise<void> {
+    const client = getClient();
+    const { error } = await client.rpc('reject_platform_support_access', {
+      p_grant_id: grantId,
+      p_reason: reason.trim(),
+    });
+    if (error) throw error;
+  },
+
+  async revokeSupportGrant(grantId: string, reason?: string): Promise<void> {
+    const client = getClient();
+    const { error } = await client.rpc('revoke_platform_support_access', {
+      p_grant_id: grantId,
+      p_reason: reason?.trim() || null,
+    });
+    if (error) throw error;
   },
 };

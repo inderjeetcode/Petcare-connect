@@ -335,6 +335,7 @@ export const doctorPortalService = {
     branch_id: string;
     doctor_profile_id: string;
     date: string;
+    service_id?: string | null;
   }): Promise<DoctorAvailableSlot[]> {
     const client = getClient();
     const { data, error } = await client.rpc('get_available_slots', {
@@ -342,6 +343,7 @@ export const doctorPortalService = {
       p_branch_id: params.branch_id,
       p_doctor_profile_id: params.doctor_profile_id,
       p_date: params.date,
+      p_service_id: params.service_id ?? null,
     });
     if (error) throw error;
     return (data || []) as DoctorAvailableSlot[];
@@ -361,13 +363,14 @@ export const doctorPortalService = {
       .from('appointments')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('requested_start', { ascending: false });
+      .order('requested_start', { ascending: false })
+      .limit(500);
 
     if (doctorProfileId) {
       apptQuery = apptQuery.eq('doctor_profile_id', doctorProfileId);
     }
 
-    const [apptRes, branchRes, petRes, clientMap, docMap, consRes] = await Promise.all([
+    const [apptRes, branchRes, petRes, clientMap, docMap, consRes, svcRes] = await Promise.all([
       apptQuery,
       client.from('branches').select('id, name, timezone').eq('organization_id', organizationId),
       client
@@ -381,11 +384,16 @@ export const doctorPortalService = {
         .select('id, appointment_id, consultation_status')
         .eq('organization_id', organizationId)
         .neq('consultation_status', 'rejected'),
+      client
+        .from('clinic_services')
+        .select('id, name, duration_minutes')
+        .eq('organization_id', organizationId),
     ]);
 
     if (apptRes.error) throw apptRes.error;
     if (branchRes.error) throw branchRes.error;
     if (petRes.error) throw petRes.error;
+    if (svcRes.error && svcRes.error.code !== '42P01') throw svcRes.error;
 
     const appts = (apptRes.data || []) as any[];
     if (appts.length === 0) return [];
@@ -407,6 +415,7 @@ export const doctorPortalService = {
 
     const branchMap = new Map(((branchRes.data || []) as any[]).map((b) => [b.id, b]));
     const petMap = new Map(((petRes.data || []) as any[]).map((p) => [p.id, p]));
+    const svcMap = new Map(((svcRes.data || []) as any[]).map((s) => [s.id, s]));
     const consByAppt = new Map<string, { id: string; status: any }>();
     for (const c of (consRes.data || []) as any[]) {
       if (c.appointment_id) {
@@ -422,6 +431,7 @@ export const doctorPortalService = {
       const pet = petMap.get(a.pet_id);
       const cli = clientMap.get(a.clinic_client_id);
       const doc = docMap.get(a.doctor_profile_id);
+      const svc = a.service_id ? svcMap.get(a.service_id) : undefined;
       const linkedCons = consByAppt.get(a.id);
       const parsedRange = parsePgTstzRange(a.scheduled_range);
 
@@ -432,6 +442,9 @@ export const doctorPortalService = {
         clinic_client_id: a.clinic_client_id,
         pet_id: a.pet_id,
         doctor_profile_id: a.doctor_profile_id,
+        service_id: a.service_id || null,
+        service_name: svc?.name || null,
+        service_duration_minutes: svc?.duration_minutes ? Number(svc.duration_minutes) : null,
         requested_start: a.requested_start,
         requested_end: a.requested_end,
         scheduled_range: a.scheduled_range,
@@ -484,7 +497,8 @@ export const doctorPortalService = {
       .from('consultations')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(500);
 
     if (doctorProfileId) {
       consQuery = consQuery.eq('doctor_id', doctorProfileId);
@@ -788,6 +802,48 @@ export const doctorPortalService = {
     };
   },
 
+  subscribeToConsultationChanges(
+    consultationId: string,
+    onUpdate: () => void
+  ): () => void {
+    const client = getClient();
+    const channel = client
+      .channel(`doctor-consultation-${consultationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'consultations',
+          filter: `id=eq.${consultationId}`,
+        },
+        () => {
+          onUpdate();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void client.removeChannel(channel);
+    };
+  },
+
+  async expireDueConsultations(
+    organizationId: string,
+    consultationId?: string
+  ): Promise<number> {
+    const client = getClient();
+    const { data, error } = await client.rpc('expire_due_consultations', {
+      p_organization_id: organizationId,
+      p_consultation_id: consultationId ?? null,
+    });
+    if (error) {
+      if (error.code === '42883') return 0;
+      throw error;
+    }
+    return Number(data || 0);
+  },
+
   // ---------------------------------------------------------------------------
   // ORGANIZATION PATIENTS & CLINICAL HISTORY (D-17 ORG-WIDE CLINICAL READ)
   // ---------------------------------------------------------------------------
@@ -886,7 +942,8 @@ export const doctorPortalService = {
       .from('medical_records')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(500);
 
     if (petId) {
       query = query.eq('pet_id', petId);
@@ -1017,7 +1074,8 @@ export const doctorPortalService = {
       .from('vaccinations')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('administered_date', { ascending: false });
+      .order('administered_date', { ascending: false })
+      .limit(500);
 
     if (petId) {
       query = query.eq('pet_id', petId);
@@ -1082,7 +1140,8 @@ export const doctorPortalService = {
       .from('prescriptions')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(500);
 
     if (petId) {
       query = query.eq('pet_id', petId);
@@ -1314,21 +1373,30 @@ export const doctorPortalService = {
       .select('*')
       .eq('user_id', userId)
       .or(`organization_id.eq.${organizationId},organization_id.is.null`)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(150);
 
     if (error) throw error;
     return (data || []) as DoctorNotification[];
   },
 
-  async markNotificationRead(notificationId: string, userId: string): Promise<void> {
+  async setNotificationReadStatus(
+    notificationId: string,
+    userId: string,
+    isRead: boolean
+  ): Promise<void> {
     const client = getClient();
     const { error } = await client
       .from('notifications')
-      .update({ is_read: true })
+      .update({ is_read: isRead })
       .eq('id', notificationId)
       .eq('user_id', userId);
 
     if (error) throw error;
+  },
+
+  async markNotificationRead(notificationId: string, userId: string): Promise<void> {
+    await this.setNotificationReadStatus(notificationId, userId, true);
   },
 
   async markAllNotificationsRead(

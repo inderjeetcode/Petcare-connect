@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from '../config/supabaseClient';
+import { ClinicServiceCategory, ClinicServiceItem } from '../types/admin';
 import { Branch, Organization } from '../types/auth';
 import {
   AppointmentStatusHistoryEntry,
@@ -29,6 +30,7 @@ import {
   validatePetForm,
   validateReviewInput,
 } from '../utils/clientPortalHelpers';
+import { parsePgTstzRange } from '../utils/doctorPortalHelpers';
 
 function getClient() {
   if (!isSupabaseConfigured || !supabase) {
@@ -449,11 +451,48 @@ export const clientPortalService = {
     };
   },
 
+  async getActiveClinicServices(
+    organizationId: string,
+    branchId?: string | null
+  ): Promise<ClinicServiceItem[]> {
+    const client = getClient();
+    const { data, error } = await client
+      .from('clinic_services')
+      .select('*')
+      .eq('organization_id', organizationId)
+      .eq('is_active', true)
+      .order('category', { ascending: true })
+      .order('name', { ascending: true });
+
+    if (error) {
+      if (error.code === '42P01') return [];
+      throw error;
+    }
+
+    return ((data || []) as any[])
+      .filter((row) => !branchId || !row.branch_id || row.branch_id === branchId)
+      .map((row) => ({
+        id: row.id,
+        organization_id: row.organization_id,
+        branch_id: row.branch_id || null,
+        name: row.name,
+        code: row.code,
+        category: row.category as ClinicServiceCategory,
+        description: row.description || null,
+        duration_minutes: Number(row.duration_minutes || 30),
+        price: Number(row.price || 0),
+        is_active: Boolean(row.is_active),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }));
+  },
+
   async getAvailableSlots(params: {
     organization_id: string;
     branch_id: string;
     doctor_profile_id: string;
     date: string; // YYYY-MM-DD
+    service_id?: string | null;
   }): Promise<AvailableSlot[]> {
     const client = getClient();
     const { data, error } = await client.rpc('get_available_slots', {
@@ -461,6 +500,7 @@ export const clientPortalService = {
       p_branch_id: params.branch_id,
       p_doctor_profile_id: params.doctor_profile_id,
       p_date: params.date,
+      p_service_id: params.service_id ?? null,
     });
 
     if (error) throw error;
@@ -473,12 +513,13 @@ export const clientPortalService = {
 
   async getAppointments(organizationId: string): Promise<ClientAppointment[]> {
     const client = getClient();
-    const [apptRes, petList, docMap, branchRes, histRes] = await Promise.all([
+    const [apptRes, petList, docMap, branchRes, histRes, svcRes] = await Promise.all([
       client
         .from('appointments')
         .select('*')
         .eq('organization_id', organizationId)
-        .order('requested_start', { ascending: false }),
+        .order('requested_start', { ascending: false })
+        .limit(500),
       this.getPets(organizationId),
       fetchDoctorLookupMap(organizationId),
       client
@@ -490,15 +531,23 @@ export const clientPortalService = {
         .select('id, appointment_id, from_status, to_status, reason, changed_at')
         .eq('organization_id', organizationId)
         .order('changed_at', { ascending: true }),
+      client
+        .from('clinic_services')
+        .select('id, name, duration_minutes')
+        .eq('organization_id', organizationId),
     ]);
 
     if (apptRes.error) throw apptRes.error;
     if (branchRes.error) throw branchRes.error;
     if (histRes.error) throw histRes.error;
+    if (svcRes.error && svcRes.error.code !== '42P01') throw svcRes.error;
 
     const petMap = new Map(petList.map((p) => [p.id, p]));
     const branchMap = new Map(
       ((branchRes.data || []) as any[]).map((b) => [b.id, b])
+    );
+    const serviceMap = new Map(
+      ((svcRes.data || []) as any[]).map((s) => [s.id, s])
     );
     const histMap = new Map<string, AppointmentStatusHistoryEntry[]>();
     for (const h of (histRes.data || []) as AppointmentStatusHistoryEntry[]) {
@@ -511,8 +560,16 @@ export const clientPortalService = {
       const pet = petMap.get(a.pet_id);
       const doc = docMap.get(a.doctor_profile_id);
       const branch = branchMap.get(a.branch_id);
+      const svc = a.service_id ? serviceMap.get(a.service_id) : undefined;
+      const parsedRange = parsePgTstzRange(a.scheduled_range);
+
       return {
         ...a,
+        service_id: a.service_id || null,
+        service_name: svc?.name || null,
+        service_duration_minutes: svc?.duration_minutes ? Number(svc.duration_minutes) : null,
+        scheduled_start: parsedRange.start,
+        scheduled_end: parsedRange.end,
         pet_name: pet?.name || 'Pet',
         pet_species: pet?.species || '',
         doctor_name: doc?.full_name || 'Clinic Veterinarian',
@@ -532,6 +589,8 @@ export const clientPortalService = {
     requested_start: string;
     requested_end: string;
     reason: string;
+    service_id?: string | null;
+    expected_service_duration_minutes?: number | null;
   }): Promise<string> {
     const err = validateAppointmentRequest(params);
     if (err) throw new Error(err);
@@ -545,6 +604,7 @@ export const clientPortalService = {
       p_requested_start: params.requested_start,
       p_requested_end: params.requested_end,
       p_reason: params.reason.trim(),
+      p_service_id: params.service_id ?? null,
     });
 
     if (error) throw error;
@@ -571,7 +631,8 @@ export const clientPortalService = {
         .from('consultations')
         .select('*')
         .eq('organization_id', organizationId)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(500),
       this.getPets(organizationId),
       fetchDoctorLookupMap(organizationId),
       client
@@ -779,6 +840,48 @@ export const clientPortalService = {
     };
   },
 
+  subscribeToConsultationChanges(
+    consultationId: string,
+    onUpdate: () => void
+  ): () => void {
+    const client = getClient();
+    const channel = client
+      .channel(`client-consultation-${consultationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'consultations',
+          filter: `id=eq.${consultationId}`,
+        },
+        () => {
+          onUpdate();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void client.removeChannel(channel);
+    };
+  },
+
+  async expireDueConsultations(
+    organizationId: string,
+    consultationId?: string
+  ): Promise<number> {
+    const client = getClient();
+    const { data, error } = await client.rpc('expire_due_consultations', {
+      p_organization_id: organizationId,
+      p_consultation_id: consultationId ?? null,
+    });
+    if (error) {
+      if (error.code === '42883') return 0;
+      throw error;
+    }
+    return Number(data || 0);
+  },
+
   // ---------------------------------------------------------------------------
   // MEDICAL RECORDS, VACCINATIONS & PRESCRIPTIONS (IMMUTABLE READ-ONLY)
   // ---------------------------------------------------------------------------
@@ -792,7 +895,8 @@ export const clientPortalService = {
       .from('medical_records')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(500);
 
     if (petId) {
       query = query.eq('pet_id', petId);
@@ -849,7 +953,8 @@ export const clientPortalService = {
       .from('vaccinations')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('administered_date', { ascending: false });
+      .order('administered_date', { ascending: false })
+      .limit(500);
 
     if (petId) {
       query = query.eq('pet_id', petId);
@@ -884,7 +989,8 @@ export const clientPortalService = {
       .from('prescriptions')
       .select('*')
       .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(500);
 
     if (petId) {
       query = query.eq('pet_id', petId);
@@ -1020,21 +1126,30 @@ export const clientPortalService = {
       .select('*')
       .eq('user_id', userId)
       .or(`organization_id.eq.${organizationId},organization_id.is.null`)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(150);
 
     if (error) throw error;
     return (data || []) as ClientNotification[];
   },
 
-  async markNotificationRead(notificationId: string, userId: string): Promise<void> {
+  async setNotificationReadStatus(
+    notificationId: string,
+    userId: string,
+    isRead: boolean
+  ): Promise<void> {
     const client = getClient();
     const { error } = await client
       .from('notifications')
-      .update({ is_read: true })
+      .update({ is_read: isRead })
       .eq('id', notificationId)
       .eq('user_id', userId);
 
     if (error) throw error;
+  },
+
+  async markNotificationRead(notificationId: string, userId: string): Promise<void> {
+    await this.setNotificationReadStatus(notificationId, userId, true);
   },
 
   async markAllNotificationsRead(
@@ -1059,7 +1174,8 @@ export const clientPortalService = {
         .from('consultation_payments')
         .select('*')
         .eq('organization_id', organizationId)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+        .limit(500),
       this.getConsultations(organizationId),
     ]);
 

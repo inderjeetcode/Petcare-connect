@@ -36,6 +36,7 @@ export interface AuthProfileSummary {
   email: string;
   phone: string | null;
   avatar_url: string | null;
+  platform_status?: 'active' | 'suspended';
 }
 
 export interface MyMembership {

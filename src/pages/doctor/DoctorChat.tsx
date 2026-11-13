@@ -19,6 +19,7 @@ import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import {
   AlertCircle,
+  Check,
   CheckCheck,
   ChevronLeft,
   Clock,
@@ -78,6 +79,7 @@ export const DoctorChat: React.FC = () => {
     setLoadingList(true);
     setListError(null);
     try {
+      await doctorPortalService.expireDueConsultations(workspace.organizationId).catch(() => 0);
       const list = await doctorPortalService.getConsultations(
         workspace.organizationId,
         workspace.doctorProfileId
@@ -162,7 +164,7 @@ export const DoctorChat: React.FC = () => {
 
   useEffect(() => {
     if (!conversation?.id || !workspace || !currentConsultation) return;
-    return doctorPortalService.subscribeToConversationMessages(
+    const unsubMessages = doctorPortalService.subscribeToConversationMessages(
       conversation.id,
       () => {
         void doctorPortalService
@@ -178,7 +180,37 @@ export const DoctorChat: React.FC = () => {
           .catch(() => {});
       }
     );
-  }, [conversation?.id, workspace, currentConsultation]);
+    const unsubConsultation = doctorPortalService.subscribeToConsultationChanges(
+      currentConsultation.id,
+      () => {
+        void loadConsultations();
+      }
+    );
+    return () => {
+      unsubMessages();
+      unsubConsultation();
+    };
+  }, [conversation?.id, workspace, currentConsultation, loadConsultations]);
+
+  useEffect(() => {
+    if (
+      !workspace ||
+      !currentConsultation ||
+      currentConsultation.consultation_status !== 'active' ||
+      !currentConsultation.expires_at
+    ) {
+      return;
+    }
+    const expiresMs = new Date(currentConsultation.expires_at).getTime();
+    if (!Number.isNaN(expiresMs) && nowMs >= expiresMs) {
+      void doctorPortalService
+        .expireDueConsultations(workspace.organizationId, currentConsultation.id)
+        .then((count) => {
+          if (count > 0) void loadConsultations();
+        })
+        .catch(() => {});
+    }
+  }, [workspace, currentConsultation, nowMs, loadConsultations]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -522,7 +554,16 @@ export const DoctorChat: React.FC = () => {
                             minute: '2-digit',
                           })}
                         </span>
-                        {isDoctor && <CheckCheck className="w-3.5 h-3.5 text-teal-300" />}
+                        {isDoctor &&
+                          (msg.read_at ? (
+                            <span title={`Read at ${new Date(msg.read_at).toLocaleString()}`}>
+                              <CheckCheck className="w-3.5 h-3.5 text-teal-200" />
+                            </span>
+                          ) : (
+                            <span title="Sent (unread)">
+                              <Check className="w-3.5 h-3.5 text-teal-300/70" />
+                            </span>
+                          ))}
                       </div>
                     </div>
                   </div>

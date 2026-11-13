@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
+import { Pagination } from '../../components/common/Pagination';
 import { useAdminWorkspace } from '../../hooks/useAdminWorkspace';
 import { useApp } from '../../context/AppContext';
 import { onboardingService } from '../../services/onboardingService';
@@ -11,6 +12,11 @@ import { Branch, DoctorGovernanceRecord } from '../../types/auth';
 import { AdminDoctorAvailabilityView } from '../../types/admin';
 import { groupSchedulesByBranchAndDay } from '../../utils/adminPortalHelpers';
 import { ISO_WEEKDAYS } from '../../utils/doctorPortalHelpers';
+import {
+  compareStrings,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   Building2,
   CalendarClock,
@@ -37,6 +43,11 @@ export const AdminDoctors: React.FC = () => {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [sortBy, setSortBy] = useState<'name' | 'fee' | 'experience'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Edit doctor governance + clinical details modal
   const [editDoc, setEditDoc] = useState<DoctorGovernanceRecord | null>(null);
@@ -87,23 +98,47 @@ export const AdminDoctors: React.FC = () => {
     void loadAll();
   }, [loadAll]);
 
-  if (!workspace) return null;
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter, branchFilter, sortBy, sortOrder]);
 
-  const branchNameMap = new Map(branches.map((b) => [b.id, b.name]));
+  const branchNameMap = useMemo(
+    () => new Map(branches.map((b) => [b.id, b.name])),
+    [branches]
+  );
 
-  const filtered = doctors.filter((doc) => {
-    if (statusFilter === 'active' && !doc.is_active) return false;
-    if (statusFilter === 'inactive' && doc.is_active) return false;
-
+  const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      (doc.full_name || '').toLowerCase().includes(q) ||
-      doc.specialization.toLowerCase().includes(q) ||
-      doc.qualification.toLowerCase().includes(q) ||
-      (doc.email || '').toLowerCase().includes(q)
+    const list = doctors.filter((doc) => {
+      if (statusFilter === 'active' && !doc.is_active) return false;
+      if (statusFilter === 'inactive' && doc.is_active) return false;
+      if (branchFilter !== 'all' && !doc.branch_ids.includes(branchFilter)) return false;
+
+      if (!q) return true;
+      return (
+        (doc.full_name || '').toLowerCase().includes(q) ||
+        doc.specialization.toLowerCase().includes(q) ||
+        doc.qualification.toLowerCase().includes(q) ||
+        (doc.email || '').toLowerCase().includes(q)
+      );
+    });
+    return sortItems(
+      list,
+      (a, b) => {
+        if (sortBy === 'fee') return Number(a.consultation_fee || 0) - Number(b.consultation_fee || 0);
+        if (sortBy === 'experience') return Number(a.experience_years || 0) - Number(b.experience_years || 0);
+        return compareStrings(a.full_name, b.full_name);
+      },
+      sortOrder
     );
-  });
+  }, [doctors, statusFilter, branchFilter, search, sortBy, sortOrder]);
+
+  const paginatedDoctors = useMemo(
+    () => paginateItems(filtered, page, pageSize),
+    [filtered, page, pageSize]
+  );
+
+  if (!workspace) return null;
 
   const openEditModal = (doc: DoctorGovernanceRecord) => {
     setEditDoc(doc);
@@ -247,6 +282,7 @@ export const AdminDoctors: React.FC = () => {
         action={
           <div className="flex items-center gap-2 flex-wrap">
             <button
+              type="button"
               onClick={() => void loadAll()}
               disabled={loading}
               className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
@@ -256,6 +292,7 @@ export const AdminDoctors: React.FC = () => {
             </button>
             {workspace.canManageStaff && (
               <button
+                type="button"
                 onClick={() => setInviteOpen(true)}
                 className="px-4 py-2 text-xs font-semibold text-white bg-teal-700 hover:bg-teal-800 rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
               >
@@ -305,22 +342,70 @@ export const AdminDoctors: React.FC = () => {
       )}
 
       {/* Search & Status Filters */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="relative w-full sm:w-96">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search doctors by name, qualification, or specialization..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
-          />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="relative w-full lg:w-96">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search doctors by name, qualification, or specialization..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={branchFilter}
+              onChange={(e) => setBranchFilter(e.target.value)}
+              aria-label="Filter doctors by branch"
+              className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+            >
+              <option value="all">All Branches</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name} ({b.code})
+                </option>
+              ))}
+            </select>
+            <select
+              value={`${sortBy}:${sortOrder}`}
+              onChange={(e) => {
+                const [by, dir] = e.target.value.split(':') as ['name' | 'fee' | 'experience', 'asc' | 'desc'];
+                setSortBy(by);
+                setSortOrder(dir);
+              }}
+              aria-label="Sort doctors"
+              className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+            >
+              <option value="name:asc">Name (A–Z)</option>
+              <option value="name:desc">Name (Z–A)</option>
+              <option value="experience:desc">Most Experienced</option>
+              <option value="fee:desc">Fee (High–Low)</option>
+              <option value="fee:asc">Fee (Low–High)</option>
+            </select>
+            {(search || statusFilter !== 'all' || branchFilter !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setStatusFilter('all');
+                  setBranchFilter('all');
+                }}
+                className="px-2.5 py-2 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 rounded-lg"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg self-start">
+        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg self-start w-fit">
           {(['all', 'active', 'inactive'] as const).map((status) => (
             <button
               key={status}
+              type="button"
               onClick={() => setStatusFilter(status)}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 statusFilter === status
@@ -354,7 +439,7 @@ export const AdminDoctors: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          {filtered.map((doc) => (
+          {paginatedDoctors.items.map((doc) => (
             <div
               key={doc.id}
               className="bg-white rounded-xl border border-slate-200 p-5 space-y-4"
@@ -479,6 +564,22 @@ export const AdminDoctors: React.FC = () => {
               </div>
             </div>
           ))}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <Pagination
+              currentPage={paginatedDoctors.currentPage}
+              totalPages={paginatedDoctors.totalPages}
+              totalItems={paginatedDoctors.totalItems}
+              startIndex={paginatedDoctors.startIndex}
+              endIndex={paginatedDoctors.endIndex}
+              pageSize={paginatedDoctors.pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+              itemLabel="doctors"
+            />
+          </div>
         </div>
       )}
 

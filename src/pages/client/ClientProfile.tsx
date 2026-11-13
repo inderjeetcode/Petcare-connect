@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
 import { formatSupabaseError } from '../../services/authService';
 import { validateClientProfile } from '../../utils/clientPortalHelpers';
+import { getInitials } from '../../utils/listManagementHelpers';
 import { PageHeader } from '../../components/common/PageHeader';
 import { AlertTriangle, Check, CheckCircle2, Loader2, Lock, Shield } from 'lucide-react';
 
@@ -24,9 +25,8 @@ export const ClientProfile: React.FC = () => {
   }, [profile]);
 
   const email = profile?.email || user?.email || '';
-  const avatarUrl =
-    profile?.avatar_url ||
-    `https://ui-avatars.com/api/?name=${encodeURIComponent(fullName || email || 'User')}&background=0f766e&color=ffffff`;
+  const avatarUrl = profile?.avatar_url || null;
+  const initials = getInitials(fullName || email || 'User');
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,11 +68,20 @@ export const ClientProfile: React.FC = () => {
 
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs">
         <div className="flex items-center gap-4 pb-6 border-b border-slate-100">
-          <img
-            src={avatarUrl}
-            alt={fullName || email}
-            className="w-18 h-18 rounded-2xl object-cover border-2 border-teal-700/20"
-          />
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt={fullName || email}
+              className="w-18 h-18 rounded-2xl object-cover border-2 border-teal-700/20"
+            />
+          ) : (
+            <div
+              aria-label={fullName || email || 'User avatar'}
+              className="w-18 h-18 rounded-2xl bg-teal-700 text-white font-bold text-xl flex items-center justify-center border-2 border-teal-700/20 shrink-0"
+            >
+              {initials}
+            </div>
+          )}
           <div>
             <h2 className="text-lg font-bold text-slate-900">{fullName || email}</h2>
             <p className="text-xs text-slate-500">

@@ -15,6 +15,13 @@ import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
 import { PrescriptionModal } from '../../components/common/PrescriptionModal';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { Pagination } from '../../components/common/Pagination';
+import {
+  compareIsoDates,
+  isWithinDateRange,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   AlertCircle,
   Ban,
@@ -67,6 +74,11 @@ export const DoctorPrescriptions: React.FC = () => {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'issued' | 'void'>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [selectedRx, setSelectedRx] = useState<DoctorPrescription | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -308,10 +320,15 @@ export const DoctorPrescriptions: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter, fromDate, toDate, sortOrder, pageSize]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return prescriptions.filter((rx) => {
+    const list = prescriptions.filter((rx) => {
       const matchesStatus = statusFilter === 'all' || rx.status === statusFilter;
+      const matchesDate = isWithinDateRange(rx.created_at, fromDate, toDate);
       const matchesQuery =
         !q ||
         rx.id.toLowerCase().includes(q) ||
@@ -319,9 +336,15 @@ export const DoctorPrescriptions: React.FC = () => {
         (rx.client_name || '').toLowerCase().includes(q) ||
         rx.diagnosis.toLowerCase().includes(q) ||
         rx.items.some((i) => i.medicine_name.toLowerCase().includes(q));
-      return matchesStatus && matchesQuery;
+      return matchesStatus && matchesDate && matchesQuery;
     });
-  }, [prescriptions, statusFilter, search]);
+    return sortItems(list, (a, b) => compareIsoDates(a.created_at, b.created_at), sortOrder);
+  }, [prescriptions, statusFilter, search, fromDate, toDate, sortOrder]);
+
+  const paged = useMemo(
+    () => paginateItems(filtered, page, pageSize),
+    [filtered, page, pageSize]
+  );
 
   if (doctorLoading || loading) {
     return (
@@ -375,33 +398,86 @@ export const DoctorPrescriptions: React.FC = () => {
       )}
 
       {/* Filters */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-        <div className="relative w-full sm:w-96">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search by patient, owner, diagnosis, or medicine..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-          />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative w-full sm:w-96">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search by patient, owner, diagnosis, or medicine..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {(['all', 'issued', 'void'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setStatusFilter(tab)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-colors ${
+                  statusFilter === tab
+                    ? 'bg-teal-700 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
-          {(['all', 'issued', 'void'] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => setStatusFilter(tab)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-colors ${
-                statusFilter === tab
-                  ? 'bg-teal-700 text-white'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                aria-label="Prescription start date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                aria-label="Prescription end date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            {(fromDate || toDate || statusFilter !== 'all' || search) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                  setStatusFilter('all');
+                  setSearch('');
+                }}
+                className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
+          <label className="inline-flex items-center gap-1.5 text-slate-600">
+            <span className="font-semibold">Sort:</span>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              aria-label="Sort prescriptions"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium"
             >
-              {tab}
-            </button>
-          ))}
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -411,8 +487,9 @@ export const DoctorPrescriptions: React.FC = () => {
           No prescriptions match your current filter.
         </div>
       ) : (
+        <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {filtered.map((rx) => {
+          {paged.items.map((rx) => {
             const canVoid =
               rx.status === 'issued' &&
               canWriteMedical &&
@@ -526,6 +603,23 @@ export const DoctorPrescriptions: React.FC = () => {
               </div>
             );
           })}
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+          <Pagination
+            currentPage={paged.currentPage}
+            totalPages={paged.totalPages}
+            totalItems={paged.totalItems}
+            startIndex={paged.startIndex}
+            endIndex={paged.endIndex}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+            itemLabel="prescriptions"
+          />
+        </div>
         </div>
       )}
 

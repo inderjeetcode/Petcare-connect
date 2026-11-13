@@ -151,6 +151,30 @@ export function validateClinicServiceInput(input: {
   return null;
 }
 
+export function validateServiceDurationAlignment(
+  startIso: string,
+  endIso: string,
+  serviceDurationMinutes?: number | null
+): string | null {
+  const startMs = new Date(startIso).getTime();
+  const endMs = new Date(endIso).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    return 'Confirmed end time must be after start time.';
+  }
+  const durationMinutes = Math.round((endMs - startMs) / 60000);
+  if (durationMinutes < 5 || durationMinutes > 480) {
+    return 'Appointment duration must be between 5 and 480 minutes.';
+  }
+  if (
+    serviceDurationMinutes &&
+    Number.isFinite(serviceDurationMinutes) &&
+    durationMinutes !== serviceDurationMinutes
+  ) {
+    return `Appointment duration (${durationMinutes} min) must match service duration (${serviceDurationMinutes} min).`;
+  }
+  return null;
+}
+
 export function detectAppointmentConflict(params: {
   doctorProfileId: string;
   startIso: string;
@@ -299,10 +323,111 @@ export function computeAdminOperationalReport(params: {
   };
 }
 
+export interface AdminServiceUsageSummary {
+  serviceId: string;
+  serviceName: string;
+  serviceCode: string;
+  category: ClinicServiceCategory;
+  durationMinutes: number;
+  price: number;
+  isActive: boolean;
+  bookingCount: number;
+  completedCount: number;
+  requestedCount: number;
+  activeCount: number;
+  droppedCount: number;
+  estimatedCompletedRevenue: number;
+}
+
+export interface AdminClientPetMetrics {
+  totalClients: number;
+  approvedClients: number;
+  requestedClients: number;
+  suspendedOrRejectedClients: number;
+  walkInClients: number;
+  registeredClients: number;
+  totalPets: number;
+  archivedPets: number;
+  avgPetsPerApprovedClient: number;
+}
+
+export function computeServiceUsageSummary(
+  services: Array<{
+    id: string;
+    name: string;
+    code: string;
+    category: ClinicServiceCategory;
+    duration_minutes: number;
+    price: number;
+    is_active: boolean;
+  }>,
+  appointments: DoctorAppointment[]
+): AdminServiceUsageSummary[] {
+  return services
+    .map((svc) => {
+      const matched = appointments.filter((a) => a.service_id === svc.id);
+      const completedCount = matched.filter((a) => a.status === 'completed').length;
+      const requestedCount = matched.filter((a) => a.status === 'requested').length;
+      const activeCount = matched.filter(
+        (a) => a.status === 'confirmed' || a.status === 'checked_in'
+      ).length;
+      const droppedCount = matched.filter(
+        (a) => a.status === 'cancelled' || a.status === 'declined' || a.status === 'no_show'
+      ).length;
+
+      return {
+        serviceId: svc.id,
+        serviceName: svc.name,
+        serviceCode: svc.code,
+        category: svc.category,
+        durationMinutes: Number(svc.duration_minutes || 0),
+        price: Number(svc.price || 0),
+        isActive: svc.is_active,
+        bookingCount: matched.length,
+        completedCount,
+        requestedCount,
+        activeCount,
+        droppedCount,
+        estimatedCompletedRevenue: Math.round(completedCount * Number(svc.price || 0) * 100) / 100,
+      };
+    })
+    .sort((a, b) => b.bookingCount - a.bookingCount || a.serviceName.localeCompare(b.serviceName));
+}
+
+export function computeAdminClientPetMetrics(
+  clients: Array<{ status: string; user_id?: string | null }>,
+  pets: Array<{ archived_at?: string | null }>
+): AdminClientPetMetrics {
+  const approvedClients = clients.filter((c) => c.status === 'approved').length;
+  const requestedClients = clients.filter((c) => c.status === 'requested').length;
+  const suspendedOrRejectedClients = clients.filter(
+    (c) => c.status === 'suspended' || c.status === 'rejected'
+  ).length;
+  const walkInClients = clients.filter((c) => !c.user_id).length;
+  const registeredClients = clients.length - walkInClients;
+  const archivedPets = pets.filter((p) => Boolean(p.archived_at)).length;
+  const activePets = pets.length - archivedPets;
+
+  return {
+    totalClients: clients.length,
+    approvedClients,
+    requestedClients,
+    suspendedOrRejectedClients,
+    walkInClients,
+    registeredClients,
+    totalPets: activePets,
+    archivedPets,
+    avgPetsPerApprovedClient:
+      approvedClients > 0 ? Math.round((activePets / approvedClients) * 10) / 10 : 0,
+  };
+}
+
 export function buildAuditExportCsv(params: {
   organizationName: string;
   report: AdminAppointmentReportMetrics;
   auditLogs: AdminAuditLogItem[];
+  serviceSummaries?: AdminServiceUsageSummary[];
+  clientPetMetrics?: AdminClientPetMetrics;
 }): string {
   const escape = (val: unknown): string => {
     const s = String(val ?? '');
@@ -322,6 +447,13 @@ export function buildAuditExportCsv(params: {
     ['Appointments', 'No-Show', 'Missed Visits', String(params.report.noShowCount), `${params.report.noShowRatePct}% rate`].join(','),
   ];
 
+  if (params.clientPetMetrics) {
+    lines.push(
+      ['Clients & Pets', 'Approved Clients', 'Active Membership', String(params.clientPetMetrics.approvedClients), `${params.clientPetMetrics.requestedClients} pending · ${params.clientPetMetrics.walkInClients} walk-ins`].join(','),
+      ['Clients & Pets', 'Registered Active Pets', 'Patient Directory', String(params.clientPetMetrics.totalPets), `Avg ${params.clientPetMetrics.avgPetsPerApprovedClient} pets / approved client`].join(',')
+    );
+  }
+
   for (const branch of params.report.byBranch) {
     lines.push(
       [
@@ -334,7 +466,19 @@ export function buildAuditExportCsv(params: {
     );
   }
 
-  for (const log of params.auditLogs.slice(0, 100)) {
+  for (const svc of params.serviceSummaries || []) {
+    lines.push(
+      [
+        'Service Summary',
+        escape(svc.serviceName),
+        escape(`${svc.category} (${svc.serviceCode})`),
+        String(svc.bookingCount),
+        `Completed: ${svc.completedCount}, Est. Revenue: $${svc.estimatedCompletedRevenue.toFixed(2)}`,
+      ].join(',')
+    );
+  }
+
+  for (const log of params.auditLogs.slice(0, 200)) {
     lines.push(
       [
         'Audit Log',

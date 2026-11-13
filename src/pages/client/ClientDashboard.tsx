@@ -16,6 +16,7 @@ import {
   formatDateTimeInZone,
   formatTimeRangeInZone,
 } from '../../utils/clientPortalHelpers';
+import { computeClientSummaryReport } from '../../utils/listManagementHelpers';
 import { PageHeader } from '../../components/common/PageHeader';
 import { MetricCard } from '../../components/common/MetricCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -52,6 +53,8 @@ export const ClientDashboard: React.FC = () => {
   const [prescriptions, setPrescriptions] = useState<ClientPrescription[]>([]);
   const [notifications, setNotifications] = useState<ClientNotification[]>([]);
   const [selectedRx, setSelectedRx] = useState<ClientPrescription | null>(null);
+  const [reportFromDate, setReportFromDate] = useState('');
+  const [reportToDate, setReportToDate] = useState('');
 
   const loadDashboard = useCallback(async () => {
     if (!workspace) return;
@@ -105,6 +108,14 @@ export const ClientDashboard: React.FC = () => {
     (c) => computeChatWindowStatus(c).canSendMessages
   );
   const unreadNotifications = notifications.filter((n) => !n.is_read);
+  const summaryReport = computeClientSummaryReport({
+    pets,
+    appointments,
+    consultations,
+    prescriptions,
+    fromDate: reportFromDate,
+    toDate: reportToDate,
+  });
 
   return (
     <div className="space-y-6">
@@ -183,6 +194,144 @@ export const ClientDashboard: React.FC = () => {
           icon={FileText}
           description={`${unreadNotifications.length} unread alerts`}
         />
+      </div>
+
+      {/* Client Care & Activity Report */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">
+              Care & Activity Summary Report
+            </h2>
+            <p className="text-xs text-slate-500">
+              Pet overview, appointment history, and consultation activity across {workspace.organizationName}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">From:</span>
+              <input
+                type="date"
+                value={reportFromDate}
+                onChange={(e) => setReportFromDate(e.target.value)}
+                aria-label="Report start date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">To:</span>
+              <input
+                type="date"
+                value={reportToDate}
+                onChange={(e) => setReportToDate(e.target.value)}
+                aria-label="Report end date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            {(reportFromDate || reportToDate) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setReportFromDate('');
+                  setReportToDate('');
+                }}
+                className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+              >
+                Reset Dates
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Active Pets</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {summaryReport.activePets}
+            </div>
+            <div className="text-[11px] text-slate-400 tabular-nums">
+              {summaryReport.archivedPets} archived
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Appointments</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {summaryReport.totalAppointments}
+            </div>
+            <div className="text-[11px] text-teal-700 tabular-nums">
+              {summaryReport.completedAppointments} completed
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Pending / Booked</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {summaryReport.requestedAppointments + summaryReport.upcomingAppointments}
+            </div>
+            <div className="text-[11px] text-slate-500 tabular-nums">
+              {summaryReport.cancelledOrDeclinedAppointments} closed
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Consultations</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {summaryReport.totalConsultations}
+            </div>
+            <div className="text-[11px] text-teal-700 tabular-nums">
+              {summaryReport.activeConsultations} active chats
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Closed Cases</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {summaryReport.completedConsultations + summaryReport.expiredConsultations}
+            </div>
+            <div className="text-[11px] text-slate-500 tabular-nums">
+              {summaryReport.expiredConsultations} expired
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Issued Rx</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {summaryReport.issuedPrescriptions}
+            </div>
+            <div className="text-[11px] text-slate-500">In selected period</div>
+          </div>
+        </div>
+
+        {summaryReport.petSummaries.length > 0 && (
+          <div className="overflow-x-auto border border-slate-100 rounded-lg">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-100">
+                <tr>
+                  <th className="py-2.5 px-3">Pet</th>
+                  <th className="py-2.5 px-3">Species</th>
+                  <th className="py-2.5 px-3 text-right">Appointments</th>
+                  <th className="py-2.5 px-3 text-right">Consultations</th>
+                  <th className="py-2.5 px-3 text-right">Last Activity</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {summaryReport.petSummaries.map((row) => (
+                  <tr key={row.petId} className="hover:bg-slate-50/50">
+                    <td className="py-2 px-3 font-bold text-slate-900">{row.petName}</td>
+                    <td className="py-2 px-3 text-slate-600 capitalize">{row.species}</td>
+                    <td className="py-2 px-3 text-right font-semibold tabular-nums text-slate-800">
+                      {row.appointmentCount}
+                    </td>
+                    <td className="py-2 px-3 text-right font-semibold tabular-nums text-slate-800">
+                      {row.consultationCount}
+                    </td>
+                    <td className="py-2 px-3 text-right text-slate-500 tabular-nums">
+                      {row.lastActivityAt
+                        ? new Date(row.lastActivityAt).toLocaleDateString()
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Main 2-Column Split */}

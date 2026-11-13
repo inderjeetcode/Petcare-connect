@@ -185,13 +185,14 @@ export interface Vaccination {
 
 export interface Notification {
   id: string;
+  organization_id?: string | null;
   user_id: string;
   title: string;
   message: string;
-  notification_type: 'consultation' | 'message' | 'prescription' | 'system';
+  notification_type: string;
   is_read: boolean;
   created_at: string;
-  link_url?: string;
+  link_url?: string | null;
 }
 
 export interface Review {

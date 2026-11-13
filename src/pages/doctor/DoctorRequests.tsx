@@ -14,6 +14,13 @@ import { PageHeader } from '../../components/common/PageHeader';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
+import { Pagination } from '../../components/common/Pagination';
+import {
+  compareIsoDates,
+  isWithinDateRange,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   CalendarCheck,
   CheckCircle2,
@@ -44,6 +51,12 @@ export const DoctorRequests: React.FC = () => {
   const [appointments, setAppointments] = useState<DoctorAppointment[]>([]);
   const [filter, setFilter] = useState<AppointmentFilterTab>('all');
   const [search, setSearch] = useState('');
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [busyApptId, setBusyApptId] = useState<string | null>(null);
 
   const loadAppointments = useCallback(async () => {
@@ -86,9 +99,21 @@ export const DoctorRequests: React.FC = () => {
     };
   }, [appointments]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [filter, search, branchFilter, fromDate, toDate, sortOrder, pageSize]);
+
+  const branchOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    appointments.forEach((a) => {
+      if (a.branch_id && a.branch_name) map.set(a.branch_id, a.branch_name);
+    });
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [appointments]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return appointments.filter((a) => {
+    const list = appointments.filter((a) => {
       const matchesTab =
         filter === 'all' ||
         (filter === 'confirmed'
@@ -97,6 +122,10 @@ export const DoctorRequests: React.FC = () => {
           ? a.status === 'declined' || a.status === 'no_show'
           : a.status === filter);
       if (!matchesTab) return false;
+      if (branchFilter !== 'all' && a.branch_id !== branchFilter) return false;
+      if (!isWithinDateRange(a.scheduled_start || a.requested_start, fromDate, toDate)) {
+        return false;
+      }
       if (!q) return true;
       return (
         (a.pet_name || '').toLowerCase().includes(q) ||
@@ -105,7 +134,21 @@ export const DoctorRequests: React.FC = () => {
         a.reason.toLowerCase().includes(q)
       );
     });
-  }, [appointments, filter, search]);
+    return sortItems(
+      list,
+      (a, b) =>
+        compareIsoDates(
+          a.scheduled_start || a.requested_start,
+          b.scheduled_start || b.requested_start
+        ),
+      sortOrder
+    );
+  }, [appointments, filter, search, branchFilter, fromDate, toDate, sortOrder]);
+
+  const paged = useMemo(
+    () => paginateItems(filtered, page, pageSize),
+    [filtered, page, pageSize]
+  );
 
   const handleStartConsultation = async (appt: DoctorAppointment) => {
     if (!workspace?.doctorProfileId) return;
@@ -188,40 +231,108 @@ export const DoctorRequests: React.FC = () => {
       </div>
 
       {/* Filters & Search */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-xs">
-        <div className="relative w-full lg:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search patient, owner, branch, or reason..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
-          />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1">
+            <div className="relative w-full sm:w-80">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search patient, owner, branch, or reason..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </div>
+            <select
+              value={branchFilter}
+              onChange={(e) => setBranchFilter(e.target.value)}
+              aria-label="Filter appointments by branch"
+              className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium"
+            >
+              <option value="all">All Branches</option>
+              {branchOptions.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {[
+              { key: 'all', label: `All (${counts.all})` },
+              { key: 'requested', label: `Requested (${counts.requested})` },
+              { key: 'confirmed', label: `Confirmed (${counts.confirmed})` },
+              { key: 'completed', label: `Completed (${counts.completed})` },
+              { key: 'cancelled', label: `Cancelled (${counts.cancelled})` },
+              { key: 'declined', label: `Declined (${counts.declined})` },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setFilter(tab.key as AppointmentFilterTab)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                  filter === tab.key
+                    ? 'bg-teal-700 text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {[
-            { key: 'all', label: `All (${counts.all})` },
-            { key: 'requested', label: `Requested (${counts.requested})` },
-            { key: 'confirmed', label: `Confirmed (${counts.confirmed})` },
-            { key: 'completed', label: `Completed (${counts.completed})` },
-            { key: 'cancelled', label: `Cancelled (${counts.cancelled})` },
-            { key: 'declined', label: `Declined (${counts.declined})` },
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setFilter(tab.key as AppointmentFilterTab)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                filter === tab.key
-                  ? 'bg-teal-700 text-white'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                aria-label="Appointment start date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                aria-label="Appointment end date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            {(fromDate || toDate || branchFilter !== 'all' || search) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                  setBranchFilter('all');
+                  setSearch('');
+                }}
+                className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
+          <label className="inline-flex items-center gap-1.5 text-slate-600">
+            <span className="font-semibold">Sort:</span>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              aria-label="Sort appointments"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium"
             >
-              {tab.label}
-            </button>
-          ))}
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -234,7 +345,7 @@ export const DoctorRequests: React.FC = () => {
         />
       ) : (
         <div className="space-y-4">
-          {filtered.map((appt) => {
+          {paged.items.map((appt) => {
             const slotStart = appt.scheduled_start || appt.requested_start;
             const slotEnd = appt.scheduled_end || appt.requested_end;
             const isConfirmedOrCheckedIn =
@@ -262,6 +373,12 @@ export const DoctorRequests: React.FC = () => {
                       {formatDateTimeInZone(slotStart, appt.branch_timezone)} (
                       {formatTimeRangeInZone(slotStart, slotEnd, appt.branch_timezone)})
                     </span>
+                    {appt.service_name && (
+                      <span className="text-[11px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 px-2 py-0.5 rounded">
+                        {appt.service_name}
+                        {appt.service_duration_minutes ? ` · ${appt.service_duration_minutes}m` : ''}
+                      </span>
+                    )}
                   </div>
                   <span className="text-[11px] font-mono text-slate-400">
                     Appt #{appt.id.slice(0, 8)}
@@ -371,6 +488,22 @@ export const DoctorRequests: React.FC = () => {
               </div>
             );
           })}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+            <Pagination
+              currentPage={paged.currentPage}
+              totalPages={paged.totalPages}
+              totalItems={paged.totalItems}
+              startIndex={paged.startIndex}
+              endIndex={paged.endIndex}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(next) => {
+                setPageSize(next);
+                setPage(1);
+              }}
+              itemLabel="appointments"
+            />
+          </div>
         </div>
       )}
     </div>

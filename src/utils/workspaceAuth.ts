@@ -70,7 +70,7 @@ export function buildWorkspaceOptions(
       organization_name: 'Pet Connect Platform',
       label: 'Platform Owner Console',
       sublabel: 'Organization Onboarding & Governance',
-      default_path: '/platform/applications',
+      default_path: '/platform/dashboard',
       roles: [],
       permissions: [],
       branch_ids: [],

@@ -19,6 +19,13 @@ import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
+import { Pagination } from '../../components/common/Pagination';
+import {
+  compareIsoDates,
+  isWithinDateRange,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   Download,
   Edit3,
@@ -46,6 +53,12 @@ export const DoctorMedicalRecords: React.FC = () => {
   const [consultations, setConsultations] = useState<DoctorConsultation[]>([]);
   const [search, setSearch] = useState('');
   const [selectedPetFilter, setSelectedPetFilter] = useState(initialPetId);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [recordsPage, setRecordsPage] = useState(1);
+  const [vaxPage, setVaxPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Add Medical Record Modal
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -121,10 +134,16 @@ export const DoctorMedicalRecords: React.FC = () => {
     [consultations, recordForm.pet_id]
   );
 
+  useEffect(() => {
+    setRecordsPage(1);
+    setVaxPage(1);
+  }, [selectedPetFilter, search, fromDate, toDate, sortOrder, pageSize]);
+
   const filteredRecords = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return records.filter((rec) => {
+    const list = records.filter((rec) => {
       if (selectedPetFilter && rec.pet_id !== selectedPetFilter) return false;
+      if (!isWithinDateRange(rec.created_at, fromDate, toDate)) return false;
       if (!q) return true;
       return (
         (rec.pet_name || '').toLowerCase().includes(q) ||
@@ -133,12 +152,19 @@ export const DoctorMedicalRecords: React.FC = () => {
         (rec.doctor_name || '').toLowerCase().includes(q)
       );
     });
-  }, [records, selectedPetFilter, search]);
+    return sortItems(list, (a, b) => compareIsoDates(a.created_at, b.created_at), sortOrder);
+  }, [records, selectedPetFilter, search, fromDate, toDate, sortOrder]);
+
+  const pagedRecords = useMemo(
+    () => paginateItems(filteredRecords, recordsPage, pageSize),
+    [filteredRecords, recordsPage, pageSize]
+  );
 
   const filteredVaccinations = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return vaccinations.filter((v) => {
+    const list = vaccinations.filter((v) => {
       if (selectedPetFilter && v.pet_id !== selectedPetFilter) return false;
+      if (!isWithinDateRange(v.administered_date, fromDate, toDate)) return false;
       if (!q) return true;
       return (
         (v.pet_name || '').toLowerCase().includes(q) ||
@@ -146,7 +172,17 @@ export const DoctorMedicalRecords: React.FC = () => {
         (v.batch_number || '').toLowerCase().includes(q)
       );
     });
-  }, [vaccinations, selectedPetFilter, search]);
+    return sortItems(
+      list,
+      (a, b) => compareIsoDates(a.administered_date, b.administered_date),
+      sortOrder
+    );
+  }, [vaccinations, selectedPetFilter, search, fromDate, toDate, sortOrder]);
+
+  const pagedVaccinations = useMemo(
+    () => paginateItems(filteredVaccinations, vaxPage, pageSize),
+    [filteredVaccinations, vaxPage, pageSize]
+  );
 
   const handleSelectFile = (
     file: File | undefined,
@@ -322,58 +358,112 @@ export const DoctorMedicalRecords: React.FC = () => {
       </div>
 
       {/* Tabs + Filters */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setActiveTab('records')}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 ${
-              activeTab === 'records'
-                ? 'bg-teal-700 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <FileText className="w-3.5 h-3.5" />
-            Medical Records ({filteredRecords.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('vaccinations')}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 ${
-              activeTab === 'vaccinations'
-                ? 'bg-teal-700 text-white'
-                : 'text-slate-600 hover:bg-slate-100'
-            }`}
-          >
-            <Syringe className="w-3.5 h-3.5" />
-            Vaccinations ({filteredVaccinations.length})
-          </button>
+      <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3 shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setActiveTab('records')}
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 ${
+                activeTab === 'records'
+                  ? 'bg-teal-700 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              Medical Records ({filteredRecords.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('vaccinations')}
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 ${
+                activeTab === 'vaccinations'
+                  ? 'bg-teal-700 text-white'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Syringe className="w-3.5 h-3.5" />
+              Vaccinations ({filteredVaccinations.length})
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={selectedPetFilter}
+              onChange={(e) => setSelectedPetFilter(e.target.value)}
+              aria-label="Filter clinical records by patient"
+              className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-white"
+            >
+              <option value="">All Organization Patients</option>
+              {patients.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.species})
+                </option>
+              ))}
+            </select>
+
+            <div className="relative w-full sm:w-72">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search diagnosis, vaccine, doctor..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </div>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={selectedPetFilter}
-            onChange={(e) => setSelectedPetFilter(e.target.value)}
-            className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-white"
-          >
-            <option value="">All Organization Patients</option>
-            {patients.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.species})
-              </option>
-            ))}
-          </select>
-
-          <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search diagnosis, vaccine, doctor..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
-            />
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                aria-label="Clinical records start date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                aria-label="Clinical records end date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            {(fromDate || toDate || selectedPetFilter || search) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                  setSelectedPetFilter('');
+                  setSearch('');
+                }}
+                className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+              >
+                Clear Filters
+              </button>
+            )}
           </div>
+          <label className="inline-flex items-center gap-1.5 text-slate-600">
+            <span className="font-semibold">Sort:</span>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              aria-label="Sort clinical records"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium"
+            >
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -386,7 +476,7 @@ export const DoctorMedicalRecords: React.FC = () => {
           />
         ) : (
           <div className="space-y-4">
-            {filteredRecords.map((rec) => (
+            {pagedRecords.items.map((rec) => (
               <div
                 key={rec.id}
                 className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-3"
@@ -451,6 +541,22 @@ export const DoctorMedicalRecords: React.FC = () => {
                 </div>
               </div>
             ))}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+              <Pagination
+                currentPage={pagedRecords.currentPage}
+                totalPages={pagedRecords.totalPages}
+                totalItems={pagedRecords.totalItems}
+                startIndex={pagedRecords.startIndex}
+                endIndex={pagedRecords.endIndex}
+                pageSize={pageSize}
+                onPageChange={setRecordsPage}
+                onPageSizeChange={(next) => {
+                  setPageSize(next);
+                  setRecordsPage(1);
+                }}
+                itemLabel="medical records"
+              />
+            </div>
           </div>
         )
       ) : filteredVaccinations.length === 0 ? (
@@ -474,7 +580,7 @@ export const DoctorMedicalRecords: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredVaccinations.map((vax) => (
+                {pagedVaccinations.items.map((vax) => (
                   <tr key={vax.id} className="hover:bg-slate-50/70">
                     <td className="py-3 px-4 font-bold text-slate-900">
                       {vax.pet_name}
@@ -485,8 +591,8 @@ export const DoctorMedicalRecords: React.FC = () => {
                         <div className="text-[11px] text-slate-500">{vax.notes}</div>
                       )}
                     </td>
-                    <td className="py-3 px-4">{vax.administered_date}</td>
-                    <td className="py-3 px-4 font-semibold text-teal-800">
+                    <td className="py-3 px-4 tabular-nums">{vax.administered_date}</td>
+                    <td className="py-3 px-4 font-semibold text-teal-800 tabular-nums">
                       {vax.next_due_date || 'Single Dose / N/A'}
                     </td>
                     <td className="py-3 px-4 font-mono text-slate-600">
@@ -500,6 +606,20 @@ export const DoctorMedicalRecords: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <Pagination
+            currentPage={pagedVaccinations.currentPage}
+            totalPages={pagedVaccinations.totalPages}
+            totalItems={pagedVaccinations.totalItems}
+            startIndex={pagedVaccinations.startIndex}
+            endIndex={pagedVaccinations.endIndex}
+            pageSize={pageSize}
+            onPageChange={setVaxPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setVaxPage(1);
+            }}
+            itemLabel="vaccinations"
+          />
         </div>
       )}
 

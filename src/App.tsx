@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { AppProvider } from './context/AppContext';
 import { AppLayout } from './layouts/AppLayout';
+import { NotificationsCenter } from './components/common/NotificationsCenter';
 import {
   RequireAuth,
   RequirePlatformAdmin,
@@ -17,6 +18,10 @@ import { AcceptInvitePage } from './pages/auth/AcceptInvitePage';
 import { UnauthorizedPage } from './pages/auth/UnauthorizedPage';
 import { WorkspacesPage } from './pages/onboarding/WorkspacesPage';
 import { PlatformOrganizationsPage } from './pages/platform/PlatformOrganizationsPage';
+import { PlatformDashboardPage } from './pages/platform/PlatformDashboardPage';
+import { PlatformUsersPage } from './pages/platform/PlatformUsersPage';
+import { PlatformAnalyticsPage } from './pages/platform/PlatformAnalyticsPage';
+import { PlatformSettingsPage } from './pages/platform/PlatformSettingsPage';
 import { AdminOnboardingPage } from './pages/admin/AdminOnboardingPage';
 
 // Client Portal Pages
@@ -84,11 +89,34 @@ export default function App() {
             >
               <Route index element={<Navigate to="/workspaces" replace />} />
               <Route path="workspaces" element={<WorkspacesPage />} />
+              <Route
+                path="notifications"
+                element={
+                  <NotificationsCenter
+                    portal="global"
+                    title="Account Notifications"
+                  />
+                }
+              />
 
               {/* Platform Owner Console */}
               <Route element={<RequirePlatformAdmin />}>
+                <Route path="platform" element={<Navigate to="/platform/dashboard" replace />} />
+                <Route path="platform/dashboard" element={<PlatformDashboardPage />} />
                 <Route path="platform/applications" element={<PlatformOrganizationsPage />} />
                 <Route path="platform/organizations" element={<PlatformOrganizationsPage />} />
+                <Route path="platform/users" element={<PlatformUsersPage />} />
+                <Route path="platform/analytics" element={<PlatformAnalyticsPage />} />
+                <Route
+                  path="platform/notifications"
+                  element={
+                    <NotificationsCenter
+                      portal="platform"
+                      title="Platform Governance Notifications"
+                    />
+                  }
+                />
+                <Route path="platform/settings" element={<PlatformSettingsPage />} />
               </Route>
 
               {/* Multi-Tenant Client Portal */}
@@ -129,6 +157,15 @@ export default function App() {
                 <Route path="prescriptions" element={<DoctorPrescriptions />} />
                 <Route path="medical-records" element={<DoctorMedicalRecords />} />
                 <Route path="availability" element={<DoctorAvailabilityPage />} />
+                <Route
+                  path="notifications"
+                  element={
+                    <NotificationsCenter
+                      portal="doctor"
+                      title="Veterinarian Notifications"
+                    />
+                  }
+                />
                 <Route path="profile" element={<DoctorProfilePage />} />
                 <Route path="settings" element={<DoctorSettingsPage />} />
               </Route>
@@ -161,7 +198,16 @@ export default function App() {
                 <Route path="payments" element={<AdminPayments />} />
                 <Route path="reports" element={<AdminReports />} />
                 <Route path="settings" element={<AdminSettings />} />
-                <Route path="profile" element={<AdminDashboard />} />
+                <Route
+                  path="notifications"
+                  element={
+                    <NotificationsCenter
+                      portal="admin"
+                      title="Organization Notifications"
+                    />
+                  }
+                />
+                <Route path="profile" element={<Navigate to="../dashboard" replace />} />
               </Route>
 
               {/* Legacy Unscoped Portal Redirects (Protected by RequireAuth) */}

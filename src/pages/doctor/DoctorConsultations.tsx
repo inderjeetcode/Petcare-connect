@@ -11,6 +11,13 @@ import { StatusBadge } from '../../components/common/StatusBadge';
 import { Modal } from '../../components/common/Modal';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
+import { Pagination } from '../../components/common/Pagination';
+import {
+  compareIsoDates,
+  isWithinDateRange,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   Calendar,
   CheckCircle2,
@@ -37,6 +44,12 @@ export const DoctorConsultations: React.FC = () => {
     'all' | 'active' | 'pending' | 'completed' | 'expired' | 'rejected'
   >('all');
   const [search, setSearch] = useState('');
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -82,11 +95,25 @@ export const DoctorConsultations: React.FC = () => {
     }
   }, [doctorLoading, loadConsultations]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [filter, search, branchFilter, fromDate, toDate, sortOrder, pageSize]);
+
+  const branchOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    consultations.forEach((c) => {
+      if (c.branch_id && c.branch_name) map.set(c.branch_id, c.branch_name);
+    });
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [consultations]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return consultations.filter((c) => {
+    const list = consultations.filter((c) => {
       const matchesTab = filter === 'all' || c.consultation_status === filter;
       if (!matchesTab) return false;
+      if (branchFilter !== 'all' && c.branch_id !== branchFilter) return false;
+      if (!isWithinDateRange(c.activated_at || c.created_at, fromDate, toDate)) return false;
       if (!q) return true;
       return (
         (c.pet_name || '').toLowerCase().includes(q) ||
@@ -95,7 +122,17 @@ export const DoctorConsultations: React.FC = () => {
         (c.clinical_notes || '').toLowerCase().includes(q)
       );
     });
-  }, [consultations, filter, search]);
+    return sortItems(
+      list,
+      (a, b) => compareIsoDates(a.activated_at || a.created_at, b.activated_at || b.created_at),
+      sortOrder
+    );
+  }, [consultations, filter, search, branchFilter, fromDate, toDate, sortOrder]);
+
+  const paged = useMemo(
+    () => paginateItems(filtered, page, pageSize),
+    [filtered, page, pageSize]
+  );
 
   const handleActivate = async (consId: string) => {
     setBusyId(consId);
@@ -189,55 +226,123 @@ export const DoctorConsultations: React.FC = () => {
         }
       />
 
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-xs">
-        <div className="relative w-full lg:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search patient, owner, or clinical notes..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
-          />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1">
+            <div className="relative w-full sm:w-80">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search patient, owner, or clinical notes..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </div>
+            <select
+              value={branchFilter}
+              onChange={(e) => setBranchFilter(e.target.value)}
+              aria-label="Filter consultations by branch"
+              className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium"
+            >
+              <option value="all">All Branches</option>
+              {branchOptions.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {[
+              { key: 'all', label: `All (${consultations.length})` },
+              {
+                key: 'active',
+                label: `Active (${consultations.filter((c) => c.consultation_status === 'active').length})`,
+              },
+              {
+                key: 'pending',
+                label: `Pending (${consultations.filter((c) => c.consultation_status === 'pending').length})`,
+              },
+              {
+                key: 'completed',
+                label: `Completed (${consultations.filter((c) => c.consultation_status === 'completed').length})`,
+              },
+              {
+                key: 'expired',
+                label: `Expired (${consultations.filter((c) => c.consultation_status === 'expired').length})`,
+              },
+              {
+                key: 'rejected',
+                label: `Declined (${consultations.filter((c) => c.consultation_status === 'rejected').length})`,
+              },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setFilter(tab.key as any)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                  filter === tab.key
+                    ? 'bg-teal-700 text-white'
+                    : 'text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          {[
-            { key: 'all', label: `All (${consultations.length})` },
-            {
-              key: 'active',
-              label: `Active (${consultations.filter((c) => c.consultation_status === 'active').length})`,
-            },
-            {
-              key: 'pending',
-              label: `Pending (${consultations.filter((c) => c.consultation_status === 'pending').length})`,
-            },
-            {
-              key: 'completed',
-              label: `Completed (${consultations.filter((c) => c.consultation_status === 'completed').length})`,
-            },
-            {
-              key: 'expired',
-              label: `Expired (${consultations.filter((c) => c.consultation_status === 'expired').length})`,
-            },
-            {
-              key: 'rejected',
-              label: `Declined (${consultations.filter((c) => c.consultation_status === 'rejected').length})`,
-            },
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setFilter(tab.key as any)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                filter === tab.key
-                  ? 'bg-teal-700 text-white'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                aria-label="Consultation start date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                aria-label="Consultation end date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            {(fromDate || toDate || branchFilter !== 'all' || search) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                  setBranchFilter('all');
+                  setSearch('');
+                }}
+                className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
+          <label className="inline-flex items-center gap-1.5 text-slate-600">
+            <span className="font-semibold">Sort:</span>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              aria-label="Sort consultations"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium"
             >
-              {tab.label}
-            </button>
-          ))}
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -249,7 +354,7 @@ export const DoctorConsultations: React.FC = () => {
         />
       ) : (
         <div className="space-y-4">
-          {filtered.map((c) => {
+          {paged.items.map((c) => {
             const win = getDoctorChatWindowStatus(c, nowMs);
             return (
               <div
@@ -405,6 +510,22 @@ export const DoctorConsultations: React.FC = () => {
               </div>
             );
           })}
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+            <Pagination
+              currentPage={paged.currentPage}
+              totalPages={paged.totalPages}
+              totalItems={paged.totalItems}
+              startIndex={paged.startIndex}
+              endIndex={paged.endIndex}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(next) => {
+                setPageSize(next);
+                setPage(1);
+              }}
+              itemLabel="consultations"
+            />
+          </div>
         </div>
       )}
 

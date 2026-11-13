@@ -4,6 +4,7 @@ import { useApp } from '../../context/AppContext';
 import { useClientWorkspace } from '../../hooks/useClientWorkspace';
 import { clientPortalService } from '../../services/clientPortalService';
 import { Branch } from '../../types/auth';
+import { ClinicServiceItem } from '../../types/admin';
 import { AvailableSlot, ClientDoctor, ClientPet } from '../../types/client';
 import {
   formatTimeRangeInZone,
@@ -13,6 +14,11 @@ import {
 import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { Pagination } from '../../components/common/Pagination';
+import {
+  compareStrings,
+  paginateItems,
+} from '../../utils/listManagementHelpers';
 import {
   Search,
   Star,
@@ -46,14 +52,19 @@ export const FindDoctor: React.FC = () => {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [doctors, setDoctors] = useState<ClientDoctor[]>([]);
   const [pets, setPets] = useState<ClientPet[]>([]);
+  const [clinicServices, setClinicServices] = useState<ClinicServiceItem[]>([]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState<string>('all');
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>('All');
+  const [sortBy, setSortBy] = useState<'name' | 'rating' | 'fee_asc' | 'experience'>('name');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Booking modal state
   const [bookingDoctor, setBookingDoctor] = useState<ClientDoctor | null>(null);
   const [bookingBranchId, setBookingBranchId] = useState('');
+  const [bookingServiceId, setBookingServiceId] = useState('');
   const [bookingDate, setBookingDate] = useState(todayIsoDate());
   const [bookingPetId, setBookingPetId] = useState('');
   const [bookingReason, setBookingReason] = useState('');
@@ -71,13 +82,15 @@ export const FindDoctor: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [dir, petList] = await Promise.all([
+      const [dir, petList, svcList] = await Promise.all([
         clientPortalService.getDoctorsAndBranches(workspace.organizationId),
         clientPortalService.getPets(workspace.organizationId),
+        clientPortalService.getActiveClinicServices(workspace.organizationId),
       ]);
       setBranches(dir.branches);
       setDoctors(dir.doctors);
       setPets(petList);
+      setClinicServices(svcList);
     } catch (err: any) {
       setError(err.message || 'Unable to load clinic veterinary specialists.');
     } finally {
@@ -101,9 +114,13 @@ export const FindDoctor: React.FC = () => {
     [branches]
   );
 
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, selectedBranchId, selectedSpecialty, sortBy, pageSize]);
+
   const filteredDoctors = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return doctors.filter((doc) => {
+    const list = doctors.filter((doc) => {
       const matchesSearch =
         !q ||
         doc.full_name.toLowerCase().includes(q) ||
@@ -115,10 +132,34 @@ export const FindDoctor: React.FC = () => {
         selectedSpecialty === 'All' || doc.specialization === selectedSpecialty;
       return doc.is_active && matchesSearch && matchesBranch && matchesSpecialty;
     });
-  }, [doctors, searchQuery, selectedBranchId, selectedSpecialty]);
+
+    return [...list].sort((a, b) => {
+      if (sortBy === 'rating') return (b.rating ?? -1) - (a.rating ?? -1);
+      if (sortBy === 'fee_asc') return a.consultation_fee - b.consultation_fee;
+      if (sortBy === 'experience') return b.experience_years - a.experience_years;
+      return compareStrings(a.full_name, b.full_name);
+    });
+  }, [doctors, searchQuery, selectedBranchId, selectedSpecialty, sortBy]);
+
+  const pagedDoctors = useMemo(
+    () => paginateItems(filteredDoctors, page, pageSize),
+    [filteredDoctors, page, pageSize]
+  );
+
+  const branchFilteredServices = useMemo(() => {
+    if (!bookingBranchId) return clinicServices;
+    return clinicServices.filter(
+      (s) => !s.branch_id || s.branch_id === bookingBranchId
+    );
+  }, [clinicServices, bookingBranchId]);
+
+  const selectedService = useMemo(
+    () => branchFilteredServices.find((s) => s.id === bookingServiceId) || null,
+    [branchFilteredServices, bookingServiceId]
+  );
 
   const fetchSlotsForSelection = useCallback(
-    async (docId: string, branchId: string, date: string) => {
+    async (docId: string, branchId: string, date: string, serviceId?: string) => {
       if (!workspace || !docId || !branchId || !date) {
         setSlots([]);
         return;
@@ -132,6 +173,7 @@ export const FindDoctor: React.FC = () => {
           branch_id: branchId,
           doctor_profile_id: docId,
           date,
+          service_id: serviceId || null,
         });
         setSlots(res);
       } catch (err: any) {
@@ -155,18 +197,30 @@ export const FindDoctor: React.FC = () => {
 
     setBookingDoctor(doctor);
     setBookingBranchId(defaultBranch);
+    setBookingServiceId('');
     setBookingDate(initialDate);
     setBookingPetId(pets[0]?.id || '');
     setBookingReason('');
     setSelectedSlot(null);
-    void fetchSlotsForSelection(doctor.id, defaultBranch, initialDate);
+    void fetchSlotsForSelection(doctor.id, defaultBranch, initialDate, '');
   };
 
-  const handleBranchOrDateChange = (nextBranch: string, nextDate: string) => {
+  const handleBranchOrDateChange = (
+    nextBranch: string,
+    nextDate: string,
+    nextServiceId: string = bookingServiceId
+  ) => {
+    const branchServices = clinicServices.filter(
+      (s) => !s.branch_id || s.branch_id === nextBranch
+    );
+    const validServiceId = branchServices.some((s) => s.id === nextServiceId)
+      ? nextServiceId
+      : '';
     setBookingBranchId(nextBranch);
     setBookingDate(nextDate);
+    setBookingServiceId(validServiceId);
     if (bookingDoctor) {
-      void fetchSlotsForSelection(bookingDoctor.id, nextBranch, nextDate);
+      void fetchSlotsForSelection(bookingDoctor.id, nextBranch, nextDate, validServiceId);
     }
   };
 
@@ -182,6 +236,8 @@ export const FindDoctor: React.FC = () => {
       requested_start: selectedSlot?.slot_start || '',
       requested_end: selectedSlot?.slot_end || '',
       reason: bookingReason,
+      service_id: bookingServiceId || null,
+      expected_service_duration_minutes: selectedService?.duration_minutes ?? null,
     });
 
     if (validationError) {
@@ -201,6 +257,8 @@ export const FindDoctor: React.FC = () => {
         requested_start: selectedSlot.slot_start,
         requested_end: selectedSlot.slot_end,
         reason: bookingReason,
+        service_id: bookingServiceId || null,
+        expected_service_duration_minutes: selectedService?.duration_minutes ?? null,
       });
       setBookingDoctor(null);
       showToast(
@@ -266,6 +324,7 @@ export const FindDoctor: React.FC = () => {
           <select
             value={selectedBranchId}
             onChange={(e) => setSelectedBranchId(e.target.value)}
+            aria-label="Filter by clinic branch"
             className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
           >
             <option value="all">All Clinic Branches ({branches.length})</option>
@@ -274,6 +333,18 @@ export const FindDoctor: React.FC = () => {
                 {b.name} {b.city ? `(${b.city})` : ''}
               </option>
             ))}
+          </select>
+
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            aria-label="Sort doctors"
+            className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 font-medium focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+          >
+            <option value="name">Sort: Name (A–Z)</option>
+            <option value="rating">Sort: Highest Rating</option>
+            <option value="experience">Sort: Experience</option>
+            <option value="fee_asc">Sort: Fee (Low–High)</option>
           </select>
         </div>
 
@@ -307,8 +378,9 @@ export const FindDoctor: React.FC = () => {
           </p>
         </div>
       ) : (
+        <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {filteredDoctors.map((doc) => {
+          {pagedDoctors.items.map((doc) => {
             const assignedBranches = doc.branch_ids
               .map((bid) => branchNameMap.get(bid))
               .filter(Boolean) as Branch[];
@@ -418,6 +490,23 @@ export const FindDoctor: React.FC = () => {
             );
           })}
         </div>
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+          <Pagination
+            currentPage={pagedDoctors.currentPage}
+            totalPages={pagedDoctors.totalPages}
+            totalItems={pagedDoctors.totalItems}
+            startIndex={pagedDoctors.startIndex}
+            endIndex={pagedDoctors.endIndex}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+            itemLabel="doctors"
+          />
+        </div>
+        </div>
       )}
 
       {/* Appointment Request Modal */}
@@ -504,23 +593,47 @@ export const FindDoctor: React.FC = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Appointment Date *
-                  </label>
-                  <div className="relative">
-                    <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                    <input
-                      type="date"
-                      required
-                      min={todayIsoDate()}
-                      value={bookingDate}
-                      onChange={(e) =>
-                        handleBranchOrDateChange(bookingBranchId, e.target.value)
-                      }
-                      className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
-                    />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Appointment Date *
+                    </label>
+                    <div className="relative">
+                      <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="date"
+                        required
+                        min={todayIsoDate()}
+                        value={bookingDate}
+                        onChange={(e) =>
+                          handleBranchOrDateChange(bookingBranchId, e.target.value)
+                        }
+                        className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+                      />
+                    </div>
                   </div>
+
+                  {branchFilteredServices.length > 0 && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Clinic Service (Optional)
+                      </label>
+                      <select
+                        value={bookingServiceId}
+                        onChange={(e) =>
+                          handleBranchOrDateChange(bookingBranchId, bookingDate, e.target.value)
+                        }
+                        className="w-full px-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+                      >
+                        <option value="">General Consultation (Doctor Default)</option>
+                        {branchFilteredServices.map((svc) => (
+                          <option key={svc.id} value={svc.id}>
+                            {svc.name} ({svc.duration_minutes}m · ${svc.price})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 {/* Real Available Slots from get_available_slots RPC */}
@@ -590,9 +703,11 @@ export const FindDoctor: React.FC = () => {
                 </div>
 
                 <div className="bg-slate-50 rounded-lg p-3 border border-slate-200 text-xs flex justify-between">
-                  <span className="text-slate-600">Standard Consultation Fee:</span>
+                  <span className="text-slate-600">
+                    {selectedService ? `Selected Service (${selectedService.duration_minutes} min):` : 'Standard Consultation Fee:'}
+                  </span>
                   <span className="font-bold text-slate-900">
-                    ${bookingDoctor.consultation_fee}
+                    ${selectedService ? selectedService.price : bookingDoctor.consultation_fee}
                   </span>
                 </div>
 

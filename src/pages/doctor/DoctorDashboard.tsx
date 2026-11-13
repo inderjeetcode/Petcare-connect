@@ -20,6 +20,7 @@ import {
   getDoctorChatWindowStatus,
   isSameDayInTimezone,
 } from '../../utils/doctorPortalHelpers';
+import { computeDoctorWorkloadReport } from '../../utils/listManagementHelpers';
 import { PageHeader } from '../../components/common/PageHeader';
 import { MetricCard } from '../../components/common/MetricCard';
 import { StatusBadge } from '../../components/common/StatusBadge';
@@ -52,6 +53,14 @@ export const DoctorDashboard: React.FC = () => {
   const [assignedBranches, setAssignedBranches] = useState<Branch[]>([]);
   const [assignments, setAssignments] = useState<DoctorBranchAssignment[]>([]);
   const [notifications, setNotifications] = useState<DoctorNotification[]>([]);
+  const [clinicalCounts, setClinicalCounts] = useState({
+    records: 0,
+    prescriptions: 0,
+    vaccinations: 0,
+  });
+  const [reportBranchId, setReportBranchId] = useState('all');
+  const [reportFromDate, setReportFromDate] = useState('');
+  const [reportToDate, setReportToDate] = useState('');
   const [startingApptId, setStartingApptId] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -68,7 +77,7 @@ export const DoctorDashboard: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [orgData, appts, cons, notifs] = await Promise.all([
+      const [orgData, appts, cons, notifs, recs, rxs, vaxs] = await Promise.all([
         doctorPortalService.getOrganizationAndBranches(
           workspace.organizationId,
           workspace.doctorProfileId
@@ -82,12 +91,20 @@ export const DoctorDashboard: React.FC = () => {
           workspace.doctorProfileId
         ),
         doctorPortalService.getNotifications(workspace.organizationId, workspace.userId),
+        doctorPortalService.getMedicalRecords(workspace.organizationId).catch(() => []),
+        doctorPortalService.getPrescriptions(workspace.organizationId).catch(() => []),
+        doctorPortalService.getVaccinations(workspace.organizationId).catch(() => []),
       ]);
       setAssignedBranches(orgData.assignedBranches);
       setAssignments(orgData.assignments.filter((a) => a.is_active));
       setAppointments(appts);
       setConsultations(cons);
       setNotifications(notifs);
+      setClinicalCounts({
+        records: recs.length,
+        prescriptions: rxs.length,
+        vaccinations: vaxs.length,
+      });
     } catch (err) {
       setError(formatSupabaseError(err, 'Failed to load doctor dashboard data.'));
     } finally {
@@ -149,6 +166,28 @@ export const DoctorDashboard: React.FC = () => {
   }, [appointments, consultations]);
 
   const recentConsultations = useMemo(() => consultations.slice(0, 5), [consultations]);
+
+  const workloadReport = useMemo(
+    () =>
+      computeDoctorWorkloadReport({
+        appointments,
+        consultations,
+        medicalRecordsCount: clinicalCounts.records,
+        prescriptionsCount: clinicalCounts.prescriptions,
+        vaccinationsCount: clinicalCounts.vaccinations,
+        branchId: reportBranchId,
+        fromDate: reportFromDate,
+        toDate: reportToDate,
+      }),
+    [
+      appointments,
+      consultations,
+      clinicalCounts,
+      reportBranchId,
+      reportFromDate,
+      reportToDate,
+    ]
+  );
 
   const handleStartConsultation = async (appt: DoctorAppointment) => {
     if (!workspace?.doctorProfileId) return;
@@ -271,6 +310,152 @@ export const DoctorDashboard: React.FC = () => {
           icon={Building2}
           description="Admin-governed locations"
         />
+      </div>
+
+      {/* Clinical Summary & Workload Indicators */}
+      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">
+              Clinical Summary & Workload Indicators
+            </h2>
+            <p className="text-xs text-slate-500">
+              Appointment outcomes, consultation load, and branch distribution for your practice
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <select
+              value={reportBranchId}
+              onChange={(e) => setReportBranchId(e.target.value)}
+              aria-label="Filter workload report by branch"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+            >
+              <option value="all">All Assigned Branches</option>
+              {assignedBranches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">From:</span>
+              <input
+                type="date"
+                value={reportFromDate}
+                onChange={(e) => setReportFromDate(e.target.value)}
+                aria-label="Workload report start date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">To:</span>
+              <input
+                type="date"
+                value={reportToDate}
+                onChange={(e) => setReportToDate(e.target.value)}
+                aria-label="Workload report end date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            {(reportBranchId !== 'all' || reportFromDate || reportToDate) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setReportBranchId('all');
+                  setReportFromDate('');
+                  setReportToDate('');
+                }}
+                className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Appointments</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {workloadReport.totalAppointments}
+            </div>
+            <div className="text-[11px] text-teal-700 tabular-nums">
+              {workloadReport.completedAppointments} completed
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Completion Rate</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {workloadReport.completionRatePct}%
+            </div>
+            <div className="text-[11px] text-slate-500 tabular-nums">
+              {workloadReport.missedOrCancelledAppointments} missed/closed
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Consultations</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {workloadReport.totalConsultations}
+            </div>
+            <div className="text-[11px] text-teal-700 tabular-nums">
+              {workloadReport.activeChatsCount} active chats
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Unique Patients</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {workloadReport.uniquePatientsSeen}
+            </div>
+            <div className="text-[11px] text-slate-500">In selected scope</div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Medical Records</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {workloadReport.medicalRecordsCount}
+            </div>
+            <div className="text-[11px] text-slate-500 tabular-nums">
+              {workloadReport.vaccinationsCount} vaccines logged
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase">Prescriptions</div>
+            <div className="text-lg font-extrabold text-slate-900 tabular-nums mt-0.5">
+              {workloadReport.prescriptionsCount}
+            </div>
+            <div className="text-[11px] text-slate-500">Org clinical ledger</div>
+          </div>
+        </div>
+
+        {workloadReport.byBranch.length > 0 && (
+          <div className="overflow-x-auto border border-slate-100 rounded-lg">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-100">
+                <tr>
+                  <th className="py-2.5 px-3">Branch</th>
+                  <th className="py-2.5 px-3 text-right">Appointments</th>
+                  <th className="py-2.5 px-3 text-right">Completed</th>
+                  <th className="py-2.5 px-3 text-right">Active 7-Day Chats</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {workloadReport.byBranch.map((row) => (
+                  <tr key={row.branchId} className="hover:bg-slate-50/50">
+                    <td className="py-2 px-3 font-bold text-slate-900">{row.branchName}</td>
+                    <td className="py-2 px-3 text-right font-semibold tabular-nums text-slate-800">
+                      {row.appointmentCount}
+                    </td>
+                    <td className="py-2 px-3 text-right font-semibold tabular-nums text-emerald-700">
+                      {row.completedCount}
+                    </td>
+                    <td className="py-2 px-3 text-right font-semibold tabular-nums text-teal-700">
+                      {row.activeConsultationCount}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -526,9 +711,13 @@ export const DoctorDashboard: React.FC = () => {
                 <Bell className="w-4 h-4 text-teal-700" />
                 Clinical Notifications
               </h3>
-              <span className="text-[11px] font-semibold text-teal-700">
-                {notifications.filter((n) => !n.is_read).length} unread
-              </span>
+              <button
+                type="button"
+                onClick={() => navigate(`${doctorBasePath}/notifications`)}
+                className="text-[11px] font-semibold text-teal-700 hover:text-teal-800"
+              >
+                {notifications.filter((n) => !n.is_read).length} unread · View all
+              </button>
             </div>
 
             {notifications.length === 0 ? (

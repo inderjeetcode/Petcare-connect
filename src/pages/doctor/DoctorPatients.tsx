@@ -15,6 +15,8 @@ import { Modal } from '../../components/common/Modal';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
+import { Pagination } from '../../components/common/Pagination';
+import { compareStrings, paginateItems } from '../../utils/listManagementHelpers';
 import {
   AlertTriangle,
   Calendar,
@@ -38,6 +40,10 @@ export const DoctorPatients: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [patients, setPatients] = useState<DoctorPatientDirectoryItem[]>([]);
   const [search, setSearch] = useState('');
+  const [speciesFilter, setSpeciesFilter] = useState('all');
+  const [sortBy, setSortBy] = useState<'name' | 'consultations'>('name');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
 
   // Clinical History Modal State
   const [selectedPet, setSelectedPet] = useState<DoctorPatientDirectoryItem | null>(null);
@@ -110,17 +116,39 @@ export const DoctorPatients: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    setPage(1);
+  }, [search, speciesFilter, sortBy, pageSize]);
+
+  const speciesOptions = useMemo(
+    () => Array.from(new Set(patients.map((p) => p.species).filter(Boolean))).sort(),
+    [patients]
+  );
+
   const filteredPets = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return patients;
-    return patients.filter(
-      (pet) =>
+    const list = patients.filter((pet) => {
+      if (speciesFilter !== 'all' && pet.species !== speciesFilter) return false;
+      if (!q) return true;
+      return (
         pet.name.toLowerCase().includes(q) ||
         pet.species.toLowerCase().includes(q) ||
         pet.breed.toLowerCase().includes(q) ||
         pet.guardian_names.some((g) => g.toLowerCase().includes(q))
-    );
-  }, [patients, search]);
+      );
+    });
+    return [...list].sort((a, b) => {
+      if (sortBy === 'consultations') {
+        return b.consultation_count - a.consultation_count || compareStrings(a.name, b.name);
+      }
+      return compareStrings(a.name, b.name);
+    });
+  }, [patients, search, speciesFilter, sortBy]);
+
+  const pagedPets = useMemo(
+    () => paginateItems(filteredPets, page, pageSize),
+    [filteredPets, page, pageSize]
+  );
 
   if (doctorLoading || loading) {
     return (
@@ -145,18 +173,42 @@ export const DoctorPatients: React.FC = () => {
         </span>
       </div>
 
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between shadow-xs">
-        <div className="relative w-full sm:w-96">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search by pet name, species, breed, or guardian..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
-          />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-xs">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1">
+          <div className="relative w-full sm:w-80">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search by pet name, species, breed, or guardian..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+            />
+          </div>
+          <select
+            value={speciesFilter}
+            onChange={(e) => setSpeciesFilter(e.target.value)}
+            aria-label="Filter patients by species"
+            className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 font-medium"
+          >
+            <option value="all">All Species</option>
+            {speciesOptions.map((sp) => (
+              <option key={sp} value={sp}>
+                {sp}
+              </option>
+            ))}
+          </select>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as 'name' | 'consultations')}
+            aria-label="Sort patients"
+            className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 font-medium"
+          >
+            <option value="name">Sort: Name (A–Z)</option>
+            <option value="consultations">Sort: Most Consultations</option>
+          </select>
         </div>
-        <span className="text-xs font-semibold text-slate-500 hidden sm:inline">
+        <span className="text-xs font-semibold text-slate-500 tabular-nums">
           {filteredPets.length} patient(s)
         </span>
       </div>
@@ -168,8 +220,9 @@ export const DoctorPatients: React.FC = () => {
           description="No active pet patients matched your search in this organization."
         />
       ) : (
+        <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredPets.map((pet) => (
+          {pagedPets.items.map((pet) => (
             <div
               key={pet.id}
               className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
@@ -259,6 +312,24 @@ export const DoctorPatients: React.FC = () => {
               </div>
             </div>
           ))}
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+          <Pagination
+            currentPage={pagedPets.currentPage}
+            totalPages={pagedPets.totalPages}
+            totalItems={pagedPets.totalItems}
+            startIndex={pagedPets.startIndex}
+            endIndex={pagedPets.endIndex}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+            pageSizeOptions={[12, 24, 48]}
+            itemLabel="patients"
+          />
+        </div>
         </div>
       )}
 

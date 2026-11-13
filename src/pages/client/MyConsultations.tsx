@@ -11,12 +11,20 @@ import {
 import {
   computeChatWindowStatus,
   formatDateTimeInZone,
+  formatTimeRangeInZone,
   validateReviewInput,
 } from '../../utils/clientPortalHelpers';
+import {
+  compareIsoDates,
+  isWithinDateRange,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import { PageHeader } from '../../components/common/PageHeader';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { Modal } from '../../components/common/Modal';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { Pagination } from '../../components/common/Pagination';
 import {
   CalendarCheck,
   Clock,
@@ -50,6 +58,12 @@ export const MyConsultations: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [apptFilter, setApptFilter] = useState<string>('all');
   const [consFilter, setConsFilter] = useState<string>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [apptPage, setApptPage] = useState(1);
+  const [consPage, setConsPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Modals
   const [selectedConsultation, setSelectedConsultation] =
@@ -82,6 +96,7 @@ export const MyConsultations: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
+      await clientPortalService.expireDueConsultations(workspace.organizationId).catch(() => 0);
       const [appts, cons, revs] = await Promise.all([
         clientPortalService.getAppointments(workspace.organizationId),
         clientPortalService.getConsultations(workspace.organizationId),
@@ -106,33 +121,73 @@ export const MyConsultations: React.FC = () => {
     [reviews]
   );
 
+  useEffect(() => {
+    setApptPage(1);
+    setConsPage(1);
+  }, [searchQuery, apptFilter, consFilter, fromDate, toDate, sortOrder, pageSize]);
+
   const filteredAppointments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return appointments.filter((a) => {
+    const filtered = appointments.filter((a) => {
       const matchesFilter = apptFilter === 'all' || a.status === apptFilter;
+      const matchesDate = isWithinDateRange(
+        a.scheduled_start || a.requested_start,
+        fromDate,
+        toDate
+      );
       const matchesSearch =
         !q ||
         (a.pet_name || '').toLowerCase().includes(q) ||
         (a.doctor_name || '').toLowerCase().includes(q) ||
         (a.branch_name || '').toLowerCase().includes(q) ||
         a.reason.toLowerCase().includes(q);
-      return matchesFilter && matchesSearch;
+      return matchesFilter && matchesDate && matchesSearch;
     });
-  }, [appointments, apptFilter, searchQuery]);
+    return sortItems(
+      filtered,
+      (a, b) =>
+        compareIsoDates(
+          a.scheduled_start || a.requested_start,
+          b.scheduled_start || b.requested_start
+        ),
+      sortOrder
+    );
+  }, [appointments, apptFilter, searchQuery, fromDate, toDate, sortOrder]);
+
+  const pagedAppointments = useMemo(
+    () => paginateItems(filteredAppointments, apptPage, pageSize),
+    [filteredAppointments, apptPage, pageSize]
+  );
 
   const filteredConsultations = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return consultations.filter((c) => {
+    const filtered = consultations.filter((c) => {
       const matchesFilter =
         consFilter === 'all' || c.consultation_status === consFilter;
+      const matchesDate = isWithinDateRange(
+        c.activated_at || c.created_at,
+        fromDate,
+        toDate
+      );
       const matchesSearch =
         !q ||
         (c.doctor_name || '').toLowerCase().includes(q) ||
         (c.pet_name || '').toLowerCase().includes(q) ||
         c.consultation_reason.toLowerCase().includes(q);
-      return matchesFilter && matchesSearch;
+      return matchesFilter && matchesDate && matchesSearch;
     });
-  }, [consultations, consFilter, searchQuery]);
+    return sortItems(
+      filtered,
+      (a, b) =>
+        compareIsoDates(a.activated_at || a.created_at, b.activated_at || b.created_at),
+      sortOrder
+    );
+  }, [consultations, consFilter, searchQuery, fromDate, toDate, sortOrder]);
+
+  const pagedConsultations = useMemo(
+    () => paginateItems(filteredConsultations, consPage, pageSize),
+    [filteredConsultations, consPage, pageSize]
+  );
 
   const handleConfirmCancelAppointment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -223,53 +278,107 @@ export const MyConsultations: React.FC = () => {
       />
 
       {/* Top Section Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-          <button
-            type="button"
-            onClick={() => setSection('appointments')}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              section === 'appointments'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Appointments ({appointments.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setSection('consultations')}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              section === 'consultations'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Clinical Consultations ({consultations.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setSection('reviews')}
-            className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              section === 'reviews'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            My Reviews ({reviews.length})
-          </button>
+      <div className="flex flex-col gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setSection('appointments')}
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                section === 'appointments'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Appointments ({appointments.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSection('consultations')}
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                section === 'consultations'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Clinical Consultations ({consultations.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSection('reviews')}
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                section === 'reviews'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              My Reviews ({reviews.length})
+            </button>
+          </div>
+
+          <div className="relative w-full lg:w-72">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search pet, doctor, branch..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+            />
+          </div>
         </div>
 
-        <div className="relative w-full sm:w-72">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search pet, doctor, branch..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
-          />
-        </div>
+        {section !== 'reviews' && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-1.5 text-slate-600">
+                <span className="font-semibold">From:</span>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  aria-label="Filter start date"
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+                />
+              </label>
+              <label className="inline-flex items-center gap-1.5 text-slate-600">
+                <span className="font-semibold">To:</span>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => setToDate(e.target.value)}
+                  aria-label="Filter end date"
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+                />
+              </label>
+              {(fromDate || toDate || searchQuery) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFromDate('');
+                    setToDate('');
+                    setSearchQuery('');
+                  }}
+                  className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">Sort:</span>
+              <select
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+                aria-label="Sort order"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              >
+                <option value="desc">Newest First</option>
+                <option value="asc">Oldest First</option>
+              </select>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* SECTION 1: APPOINTMENTS */}
@@ -324,9 +433,11 @@ export const MyConsultations: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredAppointments.map((a) => {
+              {pagedAppointments.items.map((a) => {
                 const canCancel = a.status === 'requested' || a.status === 'confirmed';
                 const showHist = expandedHistoryId === a.id;
+                const displayStart = a.scheduled_start || a.requested_start;
+                const displayEnd = a.scheduled_end || a.requested_end;
                 return (
                   <div
                     key={a.id}
@@ -338,12 +449,20 @@ export const MyConsultations: React.FC = () => {
                           <StatusBadge status={a.status} />
                           <span className="text-xs font-semibold text-teal-800 flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
-                            {formatDateTimeInZone(a.requested_start, a.branch_timezone)}
+                            {a.scheduled_start ? 'Confirmed:' : 'Requested:'}{' '}
+                            {formatDateTimeInZone(displayStart, a.branch_timezone)} (
+                            {formatTimeRangeInZone(displayStart, displayEnd, a.branch_timezone)})
                           </span>
                           <span className="text-xs text-slate-500 flex items-center gap-1">
                             <MapPin className="w-3.5 h-3.5 text-slate-400" />
                             {a.branch_name}
                           </span>
+                          {a.service_name && (
+                            <span className="text-[11px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 px-2 py-0.5 rounded">
+                              {a.service_name}
+                              {a.service_duration_minutes ? ` (${a.service_duration_minutes}m)` : ''}
+                            </span>
+                          )}
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
@@ -428,6 +547,22 @@ export const MyConsultations: React.FC = () => {
                   </div>
                 );
               })}
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                <Pagination
+                  currentPage={pagedAppointments.currentPage}
+                  totalPages={pagedAppointments.totalPages}
+                  totalItems={pagedAppointments.totalItems}
+                  startIndex={pagedAppointments.startIndex}
+                  endIndex={pagedAppointments.endIndex}
+                  pageSize={pageSize}
+                  onPageChange={setApptPage}
+                  onPageSizeChange={(next) => {
+                    setPageSize(next);
+                    setApptPage(1);
+                  }}
+                  itemLabel="appointments"
+                />
+              </div>
             </div>
           )}
         </div>
@@ -481,7 +616,7 @@ export const MyConsultations: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredConsultations.map((c) => {
+              {pagedConsultations.items.map((c) => {
                 const timer = computeChatWindowStatus(c, nowMs);
                 const canReview =
                   (c.consultation_status === 'completed' ||
@@ -576,6 +711,22 @@ export const MyConsultations: React.FC = () => {
                   </div>
                 );
               })}
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+                <Pagination
+                  currentPage={pagedConsultations.currentPage}
+                  totalPages={pagedConsultations.totalPages}
+                  totalItems={pagedConsultations.totalItems}
+                  startIndex={pagedConsultations.startIndex}
+                  endIndex={pagedConsultations.endIndex}
+                  pageSize={pageSize}
+                  onPageChange={setConsPage}
+                  onPageSizeChange={(next) => {
+                    setPageSize(next);
+                    setConsPage(1);
+                  }}
+                  itemLabel="consultations"
+                />
+              </div>
             </div>
           )}
         </div>

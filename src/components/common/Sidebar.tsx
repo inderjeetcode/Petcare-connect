@@ -54,7 +54,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
 
   const isPlatformRoute = location.pathname.startsWith('/platform');
   const isGlobalHubRoute =
-    location.pathname === '/workspaces' || location.pathname === '/accept-invite';
+    location.pathname === '/workspaces' ||
+    location.pathname === '/accept-invite' ||
+    location.pathname === '/notifications';
 
   const effectiveSlug =
     routeOrgSlug || activeWorkspace?.organization_slug || '';
@@ -66,6 +68,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
         title: 'Platform Governance',
         links: [
           {
+            to: '/platform/dashboard',
+            label: 'Platform Overview',
+            icon: LayoutDashboard,
+          },
+          {
             to: '/platform/applications',
             label: 'Clinic Applications',
             icon: ShieldCheck,
@@ -75,6 +82,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
             label: 'Organizations',
             icon: Building2,
           },
+          {
+            to: '/platform/users',
+            label: 'Platform Users',
+            icon: Users,
+          },
+          {
+            to: '/platform/analytics',
+            label: 'Analytics & Audit',
+            icon: BarChart3,
+          },
+          {
+            to: '/platform/notifications',
+            label: 'Notifications',
+            icon: Bell,
+            badge: unreadNotifs,
+          },
+          {
+            to: '/platform/settings',
+            label: 'Platform Settings',
+            icon: Settings,
+          },
           { to: '/workspaces', label: 'My Workspaces', icon: LayoutGrid },
         ],
       };
@@ -83,11 +111,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
     if (isGlobalHubRoute || !effectiveSlug) {
       const globalLinks: SidebarLinkItem[] = [
         { to: '/workspaces', label: 'My Workspaces', icon: LayoutGrid },
+        { to: '/notifications', label: 'Notifications', icon: Bell, badge: unreadNotifs },
         { to: '/accept-invite', label: 'Accept Staff Invite', icon: Ticket },
       ];
       if (isPlatformAdmin) {
         globalLinks.push({
-          to: '/platform/applications',
+          to: '/platform/dashboard',
           label: 'Platform Console',
           icon: ShieldCheck,
         });
@@ -112,6 +141,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
           { to: `${prefix}/doctor/prescriptions`, label: 'Prescriptions', icon: FileText },
           { to: `${prefix}/doctor/medical-records`, label: 'Medical & Vaccines', icon: FileCheck },
           { to: `${prefix}/doctor/availability`, label: 'Branches & Schedule', icon: Clock },
+          { to: `${prefix}/doctor/notifications`, label: 'Notifications', icon: Bell, badge: unreadNotifs },
           { to: `${prefix}/doctor/profile`, label: 'Doctor Profile', icon: User },
           { to: `${prefix}/doctor/settings`, label: 'Settings', icon: Settings },
           { to: '/workspaces', label: 'Switch Workspace', icon: LayoutGrid },
@@ -179,6 +209,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
       if (!orgId || hasPermission(orgId, 'org.manage') || hasPermission(orgId, 'branch.manage') || hasPermission(orgId, 'staff.manage')) {
         adminLinks.push({ to: `${prefix}/admin/settings`, label: 'Services & Settings', icon: Settings });
       }
+      adminLinks.push({
+        to: `${prefix}/admin/notifications`,
+        label: 'Notifications',
+        icon: Bell,
+        badge: unreadNotifs,
+      });
 
       adminLinks.push({ to: '/workspaces', label: 'Switch Workspace', icon: LayoutGrid });
 
@@ -230,7 +266,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
               {title}
             </span>
             <button
+              type="button"
               onClick={onCloseMobile}
+              aria-label="Close navigation menu"
               className="p-1 rounded-md text-slate-400 hover:text-slate-600"
             >
               <X className="w-5 h-5" />
@@ -289,10 +327,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ mobileOpen, onCloseMobile }) =
         <div className="p-3.5 m-3 rounded-xl bg-teal-50/70 border border-teal-200/80">
           <div className="flex items-center gap-2 text-xs font-bold text-teal-900">
             <ShieldCheck className="w-4 h-4 text-teal-700 shrink-0" />
-            <span>Tenant-Isolated Access</span>
+            <span>
+              {isPlatformRoute ? 'Clinical Privacy Isolated' : 'Tenant-Isolated Access'}
+            </span>
           </div>
           <p className="text-[11px] text-teal-800/90 mt-1 leading-relaxed">
-            Your workspace permissions and 7-day clinical chat sessions are scoped to the active veterinary organization.
+            {isPlatformRoute
+              ? 'Platform Owner actions are strictly audited and isolated from private clinical records, prescriptions, and patient chats.'
+              : 'Your workspace permissions and 7-day clinical chat sessions are scoped to the active veterinary organization.'}
           </p>
         </div>
       </aside>

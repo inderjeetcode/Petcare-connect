@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../../components/common/PageHeader';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { Modal } from '../../components/common/Modal';
+import { Pagination } from '../../components/common/Pagination';
 import { useAdminWorkspace } from '../../hooks/useAdminWorkspace';
 import { useApp } from '../../context/AppContext';
 import { onboardingService } from '../../services/onboardingService';
@@ -13,8 +14,17 @@ import {
   DoctorAvailableSlot,
   DoctorConsultation,
 } from '../../types/doctor';
-import { detectAppointmentConflict } from '../../utils/adminPortalHelpers';
+import {
+  detectAppointmentConflict,
+  validateServiceDurationAlignment,
+} from '../../utils/adminPortalHelpers';
 import { getDoctorChatWindowStatus } from '../../utils/doctorPortalHelpers';
+import {
+  compareIsoDates,
+  isWithinDateRange,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   AlertTriangle,
   CalendarCheck,
@@ -57,6 +67,13 @@ export const AdminConsultations: React.FC = () => {
   const [branchFilter, setBranchFilter] = useState<string>('all');
   const [doctorFilter, setDoctorFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [apptPage, setApptPage] = useState(1);
+  const [apptPageSize, setApptPageSize] = useState(10);
+  const [consPage, setConsPage] = useState(1);
+  const [consPageSize, setConsPageSize] = useState(10);
 
   // Confirm / Reschedule Modal State (with availability recheck & conflict check)
   const [slotModalTarget, setSlotModalTarget] = useState<{
@@ -87,6 +104,7 @@ export const AdminConsultations: React.FC = () => {
     if (!workspace) return;
     setLoading(true);
     try {
+      await adminPortalService.expireDueConsultations(workspace.organizationId).catch(() => 0);
       const branchScope = workspace.isBranchScoped
         ? workspace.membershipBranchIds
         : undefined;
@@ -113,8 +131,13 @@ export const AdminConsultations: React.FC = () => {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    setApptPage(1);
+    setConsPage(1);
+  }, [apptFilter, branchFilter, doctorFilter, search, fromDate, toDate, sortOrder, activeTab]);
+
   const fetchSlotsForModal = useCallback(
-    async (branchId: string, doctorId: string, dateStr: string) => {
+    async (branchId: string, doctorId: string, dateStr: string, serviceId?: string | null) => {
       if (!workspace || !branchId || !doctorId || !dateStr) return;
       setSlotsLoading(true);
       try {
@@ -122,7 +145,8 @@ export const AdminConsultations: React.FC = () => {
           workspace.organizationId,
           branchId,
           doctorId,
-          dateStr
+          dateStr,
+          serviceId ?? null
         );
         setAvailableSlots(slots);
       } catch {
@@ -146,7 +170,12 @@ export const AdminConsultations: React.FC = () => {
     setSlotDate(datePart);
     setSelectedStartIso(startVal);
     setSelectedEndIso(endVal);
-    void fetchSlotsForModal(appointment.branch_id, appointment.doctor_profile_id, datePart);
+    void fetchSlotsForModal(
+      appointment.branch_id,
+      appointment.doctor_profile_id,
+      datePart,
+      appointment.service_id ?? null
+    );
   };
 
   const conflictAppt =
@@ -168,6 +197,16 @@ export const AdminConsultations: React.FC = () => {
       return;
     }
 
+    const durationErr = validateServiceDurationAlignment(
+      selectedStartIso,
+      selectedEndIso,
+      slotModalTarget.appointment.service_duration_minutes
+    );
+    if (durationErr) {
+      showToast(durationErr, 'error');
+      return;
+    }
+
     setSubmitting(true);
     try {
       if (slotModalTarget.mode === 'confirm') {
@@ -176,6 +215,7 @@ export const AdminConsultations: React.FC = () => {
           confirmed_start: selectedStartIso,
           confirmed_end: selectedEndIso,
           doctor_profile_id: slotDoctorId,
+          service_id: slotModalTarget.appointment.service_id ?? null,
         });
         showToast('Appointment confirmed and slot locked.', 'success');
       } else {
@@ -279,33 +319,60 @@ export const AdminConsultations: React.FC = () => {
     }
   };
 
-  const filteredAppointments = appointments.filter((a) => {
-    if (apptFilter !== 'all' && a.status !== apptFilter) return false;
-    if (branchFilter !== 'all' && a.branch_id !== branchFilter) return false;
-    if (doctorFilter !== 'all' && a.doctor_profile_id !== doctorFilter) return false;
-
+  const filteredAppointments = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      (a.pet_name || '').toLowerCase().includes(q) ||
-      (a.client_name || '').toLowerCase().includes(q) ||
-      (a.doctor_name || '').toLowerCase().includes(q) ||
-      a.reason.toLowerCase().includes(q)
-    );
-  });
+    const list = appointments.filter((a) => {
+      if (apptFilter !== 'all' && a.status !== apptFilter) return false;
+      if (branchFilter !== 'all' && a.branch_id !== branchFilter) return false;
+      if (doctorFilter !== 'all' && a.doctor_profile_id !== doctorFilter) return false;
+      const targetDate = a.scheduled_start || a.requested_start || a.created_at;
+      if (!isWithinDateRange(targetDate, fromDate, toDate)) return false;
 
-  const filteredConsultations = consultations.filter((c) => {
-    if (branchFilter !== 'all' && c.branch_id !== branchFilter) return false;
-    if (doctorFilter !== 'all' && c.doctor_id !== doctorFilter) return false;
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      (c.pet_name || '').toLowerCase().includes(q) ||
-      (c.client_name || '').toLowerCase().includes(q) ||
-      (c.doctor_name || '').toLowerCase().includes(q) ||
-      c.consultation_reason.toLowerCase().includes(q)
+      if (!q) return true;
+      return (
+        (a.pet_name || '').toLowerCase().includes(q) ||
+        (a.client_name || '').toLowerCase().includes(q) ||
+        (a.doctor_name || '').toLowerCase().includes(q) ||
+        a.reason.toLowerCase().includes(q)
+      );
+    });
+    return sortItems(
+      list,
+      (a, b) => compareIsoDates(a.scheduled_start || a.requested_start, b.scheduled_start || b.requested_start),
+      sortOrder
     );
-  });
+  }, [appointments, apptFilter, branchFilter, doctorFilter, fromDate, toDate, search, sortOrder]);
+
+  const paginatedAppointments = useMemo(
+    () => paginateItems(filteredAppointments, apptPage, apptPageSize),
+    [filteredAppointments, apptPage, apptPageSize]
+  );
+
+  const filteredConsultations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = consultations.filter((c) => {
+      if (branchFilter !== 'all' && c.branch_id !== branchFilter) return false;
+      if (doctorFilter !== 'all' && c.doctor_id !== doctorFilter) return false;
+      if (!isWithinDateRange(c.activated_at || c.created_at, fromDate, toDate)) return false;
+      if (!q) return true;
+      return (
+        (c.pet_name || '').toLowerCase().includes(q) ||
+        (c.client_name || '').toLowerCase().includes(q) ||
+        (c.doctor_name || '').toLowerCase().includes(q) ||
+        c.consultation_reason.toLowerCase().includes(q)
+      );
+    });
+    return sortItems(
+      list,
+      (a, b) => compareIsoDates(a.activated_at || a.created_at, b.activated_at || b.created_at),
+      sortOrder
+    );
+  }, [consultations, branchFilter, doctorFilter, fromDate, toDate, search, sortOrder]);
+
+  const paginatedConsultations = useMemo(
+    () => paginateItems(filteredConsultations, consPage, consPageSize),
+    [filteredConsultations, consPage, consPageSize]
+  );
 
   const eligibleBranchDoctors = slotModalTarget
     ? doctors.filter(
@@ -373,6 +440,7 @@ export const AdminConsultations: React.FC = () => {
             <select
               value={branchFilter}
               onChange={(e) => setBranchFilter(e.target.value)}
+              aria-label="Filter by branch"
               className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white"
             >
               <option value="all">All Accessible Branches</option>
@@ -386,6 +454,7 @@ export const AdminConsultations: React.FC = () => {
             <select
               value={doctorFilter}
               onChange={(e) => setDoctorFilter(e.target.value)}
+              aria-label="Filter by doctor"
               className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white"
             >
               <option value="all">All Doctors</option>
@@ -395,6 +464,46 @@ export const AdminConsultations: React.FC = () => {
                 </option>
               ))}
             </select>
+
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              aria-label="From date"
+              className="px-2.5 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+            />
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              aria-label="To date"
+              className="px-2.5 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+            />
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'desc' | 'asc')}
+              aria-label="Sort order"
+              className="px-3 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+            >
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
+            </select>
+            {(search || branchFilter !== 'all' || doctorFilter !== 'all' || fromDate || toDate || apptFilter !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setBranchFilter('all');
+                  setDoctorFilter('all');
+                  setFromDate('');
+                  setToDate('');
+                  setApptFilter('all');
+                }}
+                className="px-2.5 py-2 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 rounded-lg"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
 
@@ -414,6 +523,7 @@ export const AdminConsultations: React.FC = () => {
             ).map(([key, label]) => (
               <button
                 key={key}
+                type="button"
                 onClick={() => setApptFilter(key)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   apptFilter === key
@@ -439,7 +549,7 @@ export const AdminConsultations: React.FC = () => {
           <p className="text-xs text-slate-500">Loading clinical schedule data...</p>
         </div>
       ) : activeTab === 'appointments' ? (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           {filteredAppointments.length === 0 ? (
             <div className="p-10 text-center space-y-2">
               <CalendarCheck className="w-8 h-8 text-slate-400 mx-auto" />
@@ -449,6 +559,7 @@ export const AdminConsultations: React.FC = () => {
               </p>
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
                 <tr>
@@ -461,7 +572,7 @@ export const AdminConsultations: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredAppointments.map((appt) => {
+                {paginatedAppointments.items.map((appt) => {
                   const windowStart = appt.scheduled_start || appt.requested_start;
                   const windowEnd = appt.scheduled_end || appt.requested_end;
                   return (
@@ -490,8 +601,16 @@ export const AdminConsultations: React.FC = () => {
                           })}
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-slate-700 max-w-xs truncate" title={appt.reason}>
-                        {appt.reason}
+                      <td className="py-3 px-4 text-slate-700 max-w-xs">
+                        <div className="truncate" title={appt.reason}>
+                          {appt.reason}
+                        </div>
+                        {appt.service_name && (
+                          <span className="inline-block mt-1 px-1.5 py-0.5 text-[10px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 rounded">
+                            {appt.service_name}
+                            {appt.service_duration_minutes ? ` · ${appt.service_duration_minutes}m` : ''}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-4">
                         <StatusBadge status={appt.status} />
@@ -603,6 +722,21 @@ export const AdminConsultations: React.FC = () => {
                 })}
               </tbody>
             </table>
+            <Pagination
+              currentPage={paginatedAppointments.currentPage}
+              totalPages={paginatedAppointments.totalPages}
+              totalItems={paginatedAppointments.totalItems}
+              startIndex={paginatedAppointments.startIndex}
+              endIndex={paginatedAppointments.endIndex}
+              pageSize={paginatedAppointments.pageSize}
+              onPageChange={setApptPage}
+              onPageSizeChange={(size) => {
+                setApptPageSize(size);
+                setApptPage(1);
+              }}
+              itemLabel="appointments"
+            />
+            </div>
           )}
         </div>
       ) : (
@@ -614,7 +748,7 @@ export const AdminConsultations: React.FC = () => {
             </span>
           </div>
 
-          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             {filteredConsultations.length === 0 ? (
               <div className="p-10 text-center space-y-2">
                 <Clock className="w-8 h-8 text-slate-400 mx-auto" />
@@ -624,6 +758,7 @@ export const AdminConsultations: React.FC = () => {
                 </p>
               </div>
             ) : (
+              <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
                   <tr>
@@ -636,7 +771,7 @@ export const AdminConsultations: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredConsultations.map((cons) => {
+                  {paginatedConsultations.items.map((cons) => {
                     const timer = getDoctorChatWindowStatus(cons);
                     return (
                       <tr key={cons.id} className="hover:bg-slate-50/70">
@@ -701,6 +836,21 @@ export const AdminConsultations: React.FC = () => {
                   })}
                 </tbody>
               </table>
+              <Pagination
+                currentPage={paginatedConsultations.currentPage}
+                totalPages={paginatedConsultations.totalPages}
+                totalItems={paginatedConsultations.totalItems}
+                startIndex={paginatedConsultations.startIndex}
+                endIndex={paginatedConsultations.endIndex}
+                pageSize={paginatedConsultations.pageSize}
+                onPageChange={setConsPage}
+                onPageSizeChange={(size) => {
+                  setConsPageSize(size);
+                  setConsPage(1);
+                }}
+                itemLabel="consultations"
+              />
+              </div>
             )}
           </div>
         </div>
@@ -738,7 +888,8 @@ export const AdminConsultations: React.FC = () => {
                     void fetchSlotsForModal(
                       slotModalTarget.appointment.branch_id,
                       nextDoc,
-                      slotDate
+                      slotDate,
+                      slotModalTarget.appointment.service_id ?? null
                     );
                   }}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white disabled:bg-slate-100"
@@ -764,7 +915,8 @@ export const AdminConsultations: React.FC = () => {
                     void fetchSlotsForModal(
                       slotModalTarget.appointment.branch_id,
                       slotDoctorId,
-                      nextDate
+                      nextDate,
+                      slotModalTarget.appointment.service_id ?? null
                     );
                   }}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg"

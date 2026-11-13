@@ -29,9 +29,11 @@ import { supabaseService } from '../services/supabaseService';
 import { clientPortalService } from '../services/clientPortalService';
 import { doctorPortalService } from '../services/doctorPortalService';
 import { adminPortalService } from '../services/adminPortalService';
+import { platformPortalService } from '../services/platformPortalService';
 import { onboardingService } from '../services/onboardingService';
 import { useAuth } from './AuthContext';
 import { deriveLegacyPortalRole } from '../utils/workspaceAuth';
+import { deduplicateNotifications } from '../utils/listManagementHelpers';
 
 export interface ToastItem {
   id: string;
@@ -116,8 +118,9 @@ interface AppContextType {
 
   // Notifications
   notifications: Notification[];
+  toggleNotificationRead: (id: string, isRead: boolean) => Promise<void>;
   markNotificationRead: (id: string) => Promise<void>;
-  markAllNotificationsRead: () => void;
+  markAllNotificationsRead: () => Promise<void>;
 
   // Audit Logs
   auditLogs: AuditLog[];
@@ -288,42 +291,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
-      const [
-        dbProfiles,
-        dbPets,
-        dbDocs,
-        dbConsultations,
-        dbPrescriptions,
-        dbMeds,
-        dbVax,
-        dbNotifs,
-        dbAudit,
-      ] = await Promise.all([
-        supabaseService.getProfiles().catch(() => []),
-        supabaseService.getPets().catch(() => []),
-        supabaseService.getDoctors().catch(() => []),
-        supabaseService.getConsultations().catch(() => []),
-        supabaseService.getPrescriptions().catch(() => []),
-        supabaseService.getMedicalRecords().catch(() => []),
-        supabaseService.getVaccinations().catch(() => []),
-        supabaseService.getNotifications(authUser.id).catch(() => []),
-        supabaseService.getAuditLogs().catch(() => []),
-      ]);
-
-      setProfiles(dbProfiles);
-      setPets(dbPets);
-      setDoctors(dbDocs);
-      setConsultations(dbConsultations);
-      setPrescriptions(dbPrescriptions);
-      setMedicalRecords(dbMeds);
-      setVaccinations(dbVax);
-      setNotifications(dbNotifs);
-      setAuditLogs(dbAudit);
-
-      for (const c of dbConsultations) {
-        const msgs = await supabaseService.getChatMessages(c.id).catch(() => []);
-        setChatMessages((prev) => ({ ...prev, [c.id]: msgs }));
+      if (activeWorkspace?.portal === 'platform') {
+        // Strict Platform Owner isolation: never query clinical, pet, prescription, or chat tables.
+        const dbNotifs = await platformPortalService
+          .getNotifications(authUser.id)
+          .catch(() => [] as Notification[]);
+        setNotifications(deduplicateNotifications(dbNotifs as Notification[]));
+        setPets([]);
+        setDoctors([]);
+        setConsultations([]);
+        setPrescriptions([]);
+        setMedicalRecords([]);
+        setVaccinations([]);
+        setAuditLogs([]);
+        setChatMessages({});
+        return;
       }
+
+      // Global hub (/workspaces or unassigned workspace): load ONLY the authenticated user's notifications.
+      const dbNotifs = supabase
+        ? await supabase
+            .from('notifications')
+            .select('*')
+            .eq('user_id', authUser.id)
+            .order('created_at', { ascending: false })
+            .limit(150)
+            .then(({ data }) => (data || []) as Notification[], () => [] as Notification[])
+        : [];
+      setNotifications(deduplicateNotifications(dbNotifs));
+      setProfiles([]);
+      setPets([]);
+      setDoctors([]);
+      setConsultations([]);
+      setPrescriptions([]);
+      setMedicalRecords([]);
+      setVaccinations([]);
+      setAuditLogs([]);
+      setChatMessages({});
     } catch (err: any) {
       showToast(`Database sync: ${err.message}`, 'warning');
     } finally {
@@ -346,6 +350,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setChatMessages({});
     }
   }, [isDemoMode, authUser, reloadFromDatabase]);
+
+  // Real-time Supabase notifications listener with automatic cleanup & deduplication
+  useEffect(() => {
+    if (isDemoMode || !isSupabaseConfigured || !supabase || !authUser?.id) {
+      return;
+    }
+
+    const activeOrgId = activeWorkspace?.organization_id || null;
+    const isPortalScoped =
+      activeWorkspace?.portal === 'client' ||
+      activeWorkspace?.portal === 'doctor' ||
+      activeWorkspace?.portal === 'admin';
+
+    const channel = supabase
+      .channel(`user-notifications-${authUser.id}-${activeOrgId || 'global'}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${authUser.id}`,
+        },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT' && payload.new) {
+            const incoming = payload.new as Notification;
+            if (
+              isPortalScoped &&
+              activeOrgId &&
+              incoming.organization_id &&
+              incoming.organization_id !== activeOrgId
+            ) {
+              return;
+            }
+            setNotifications((prev) => deduplicateNotifications([incoming, ...prev]).slice(0, 150));
+          } else if (payload.eventType === 'UPDATE' && payload.new) {
+            const updated = payload.new as Notification;
+            setNotifications((prev) =>
+              prev.map((n) => (n.id === updated.id ? { ...n, ...updated } : n))
+            );
+          } else if (payload.eventType === 'DELETE' && payload.old?.id) {
+            setNotifications((prev) => prev.filter((n) => n.id !== payload.old.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (supabase) {
+        void supabase.removeChannel(channel);
+      }
+    };
+  }, [isDemoMode, authUser?.id, activeWorkspace?.organization_id, activeWorkspace?.portal]);
 
   // Current active profile
   const currentProfile: Profile = React.useMemo(() => {
@@ -897,32 +954,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ---------------------------------------------------------------------------
   // NOTIFICATIONS
   // ---------------------------------------------------------------------------
-  const markNotificationRead = async (id: string) => {
-    if (!isDemoMode && isSupabaseConfigured && authUser) {
-      await clientPortalService.markNotificationRead(id, authUser.id).catch(() => {});
-    }
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
-    );
-  };
+  const toggleNotificationRead = useCallback(
+    async (id: string, isRead: boolean) => {
+      const previous = notifications;
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, is_read: isRead } : n))
+      );
 
-  const markAllNotificationsRead = () => {
-    if (!isDemoMode && isSupabaseConfigured && authUser) {
-      if (activeWorkspace?.organization_id) {
-        void clientPortalService
-          .markAllNotificationsRead(activeWorkspace.organization_id, authUser.id)
-          .catch(() => {});
-      } else if (supabase) {
-        void supabase
-          .from('notifications')
-          .update({ is_read: true })
-          .eq('user_id', authUser.id)
-          .eq('is_read', false);
+      if (!isDemoMode && isSupabaseConfigured && authUser && supabase) {
+        try {
+          const { error } = await supabase
+            .from('notifications')
+            .update({ is_read: isRead })
+            .eq('id', id)
+            .eq('user_id', authUser.id);
+          if (error) throw error;
+        } catch (err: any) {
+          setNotifications(previous);
+          showToast(
+            err?.message || 'Unable to update notification status. Please retry.',
+            'error'
+          );
+          throw err;
+        }
+      }
+    },
+    [notifications, isDemoMode, authUser, showToast]
+  );
+
+  const markNotificationRead = useCallback(
+    async (id: string) => {
+      const target = notifications.find((n) => n.id === id);
+      if (target?.is_read) return;
+      await toggleNotificationRead(id, true);
+    },
+    [notifications, toggleNotificationRead]
+  );
+
+  const markAllNotificationsRead = useCallback(async () => {
+    const unreadIds = notifications.filter((n) => !n.is_read).map((n) => n.id);
+    if (unreadIds.length === 0) return;
+
+    const previous = notifications;
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+
+    if (!isDemoMode && isSupabaseConfigured && authUser && supabase) {
+      try {
+        if (activeWorkspace?.portal === 'client' && activeWorkspace.organization_id) {
+          await clientPortalService.markAllNotificationsRead(
+            activeWorkspace.organization_id,
+            authUser.id
+          );
+        } else if (activeWorkspace?.portal === 'doctor' && activeWorkspace.organization_id) {
+          await doctorPortalService.markAllNotificationsRead(
+            activeWorkspace.organization_id,
+            authUser.id
+          );
+        } else if (activeWorkspace?.portal === 'admin' && activeWorkspace.organization_id) {
+          await adminPortalService.markAllNotificationsRead(
+            activeWorkspace.organization_id,
+            authUser.id
+          );
+        } else {
+          await platformPortalService.markAllNotificationsRead(authUser.id);
+        }
+      } catch (err: any) {
+        setNotifications(previous);
+        showToast(
+          err?.message || 'Failed to mark all notifications as read.',
+          'error'
+        );
+        return;
       }
     }
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-    showToast('All notifications marked as read', 'info');
-  };
+    showToast('All notifications marked as read.', 'info');
+  }, [notifications, isDemoMode, authUser, activeWorkspace, showToast]);
 
   // ---------------------------------------------------------------------------
   // RESET DEMO DATA
@@ -993,6 +1099,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         vaccinations,
         addVaccination,
         notifications,
+        toggleNotificationRead,
         markNotificationRead,
         markAllNotificationsRead,
         auditLogs,

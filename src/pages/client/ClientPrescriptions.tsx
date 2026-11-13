@@ -6,6 +6,13 @@ import { PageHeader } from '../../components/common/PageHeader';
 import { PrescriptionModal } from '../../components/common/PrescriptionModal';
 import { StatusBadge } from '../../components/common/StatusBadge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { Pagination } from '../../components/common/Pagination';
+import {
+  compareIsoDates,
+  isWithinDateRange,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import {
   FileText,
   Search,
@@ -23,6 +30,11 @@ export const ClientPrescriptions: React.FC = () => {
   const [prescriptions, setPrescriptions] = useState<ClientPrescription[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'issued' | 'void'>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [selectedRx, setSelectedRx] = useState<ClientPrescription | null>(null);
 
   const loadPrescriptions = useCallback(async () => {
@@ -50,19 +62,34 @@ export const ClientPrescriptions: React.FC = () => {
     void loadPrescriptions();
   }, [loadPrescriptions]);
 
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, statusFilter, fromDate, toDate, sortOrder, pageSize]);
+
   const filteredRx = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return prescriptions.filter((rx) => {
+    const filtered = prescriptions.filter((rx) => {
       const matchesStatus = statusFilter === 'all' || rx.status === statusFilter;
+      const matchesDate = isWithinDateRange(rx.created_at, fromDate, toDate);
       const matchesSearch =
         !q ||
         (rx.pet_name || '').toLowerCase().includes(q) ||
         rx.diagnosis.toLowerCase().includes(q) ||
         (rx.doctor_name || '').toLowerCase().includes(q) ||
         rx.items.some((i) => i.medicine_name.toLowerCase().includes(q));
-      return matchesStatus && matchesSearch;
+      return matchesStatus && matchesDate && matchesSearch;
     });
-  }, [prescriptions, statusFilter, searchQuery]);
+    return sortItems(
+      filtered,
+      (a, b) => compareIsoDates(a.created_at, b.created_at),
+      sortOrder
+    );
+  }, [prescriptions, statusFilter, searchQuery, fromDate, toDate, sortOrder]);
+
+  const pagedRx = useMemo(
+    () => paginateItems(filteredRx, page, pageSize),
+    [filteredRx, page, pageSize]
+  );
 
   if (!workspace || loading) {
     return (
@@ -99,43 +126,96 @@ export const ClientPrescriptions: React.FC = () => {
       />
 
       {/* Search & Filter */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-        <div className="relative w-full sm:w-96">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search by pet, diagnosis, doctor, or medication..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-          />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative w-full sm:w-96">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search by pet, diagnosis, doctor, or medication..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+            />
+          </div>
+
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+            {[
+              { key: 'all', label: `All (${prescriptions.length})` },
+              {
+                key: 'issued',
+                label: `Active (${prescriptions.filter((p) => p.status === 'issued').length})`,
+              },
+              {
+                key: 'void',
+                label: `Voided (${prescriptions.filter((p) => p.status === 'void').length})`,
+              },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setStatusFilter(tab.key as any)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                  statusFilter === tab.key
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-          {[
-            { key: 'all', label: `All (${prescriptions.length})` },
-            {
-              key: 'issued',
-              label: `Active (${prescriptions.filter((p) => p.status === 'issued').length})`,
-            },
-            {
-              key: 'void',
-              label: `Voided (${prescriptions.filter((p) => p.status === 'void').length})`,
-            },
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setStatusFilter(tab.key as any)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                statusFilter === tab.key
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">From:</span>
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                aria-label="Prescription start date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            <label className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="font-semibold">To:</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                aria-label="Prescription end date"
+                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 tabular-nums focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </label>
+            {(fromDate || toDate || searchQuery || statusFilter !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFromDate('');
+                  setToDate('');
+                  setSearchQuery('');
+                  setStatusFilter('all');
+                }}
+                className="px-2.5 py-1.5 font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
+          <label className="inline-flex items-center gap-1.5 text-slate-600">
+            <span className="font-semibold">Sort:</span>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              aria-label="Sort prescriptions"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-teal-700/20"
             >
-              {tab.label}
-            </button>
-          ))}
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -149,8 +229,9 @@ export const ClientPrescriptions: React.FC = () => {
           </p>
         </div>
       ) : (
+        <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {filteredRx.map((rx) => (
+          {pagedRx.items.map((rx) => (
             <div
               key={rx.id}
               className={`bg-white rounded-xl border p-5 shadow-xs transition-all flex flex-col justify-between ${
@@ -242,6 +323,23 @@ export const ClientPrescriptions: React.FC = () => {
               </div>
             </div>
           ))}
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+          <Pagination
+            currentPage={pagedRx.currentPage}
+            totalPages={pagedRx.totalPages}
+            totalItems={pagedRx.totalItems}
+            startIndex={pagedRx.startIndex}
+            endIndex={pagedRx.endIndex}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+            itemLabel="prescriptions"
+          />
+        </div>
         </div>
       )}
 

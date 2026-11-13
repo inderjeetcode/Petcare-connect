@@ -807,6 +807,273 @@ BEGIN
   END;
   RAISE NOTICE 'TEST 12 PASSED: Staff invitation, doctor self/governance & attachment isolation verified';
 
+  -- ---------------------------------------------------------------------------
+  -- TEST 13: PHASE 8 CORE BUSINESS WORKFLOWS & TRANSACTIONAL INVARIANTS
+  -- ---------------------------------------------------------------------------
+  DECLARE
+    v_p8_pet_id        UUID;
+    v_p8_svc_res       JSONB;
+    v_p8_svc_id        UUID;
+    v_p8_date          DATE := (CURRENT_DATE + 21);
+    v_p8_appt_1        UUID;
+    v_p8_appt_2        UUID;
+    v_p8_appt_unconf   UUID;
+    v_p8_cons_res      JSONB;
+    v_p8_cons_id       UUID;
+    v_p8_conv_id       UUID;
+    v_p8_msg_res       JSONB;
+    v_p8_rec_orig      UUID;
+    v_p8_rec_amend     UUID;
+    v_p8_rx_id         UUID;
+    v_p8_vax_id        UUID;
+    v_p8_slots_before  BIGINT;
+    v_p8_slots_after   BIGINT;
+    v_p8_expired_cnt   INT;
+    v_p8_cons_row      public.consultations;
+    v_p8_orig_diag     TEXT;
+    v_p8_notif_cnt     BIGINT;
+  BEGIN
+    -- Create fresh pet for Org A Client 1
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
+    v_p8_pet_id := public.create_pet(
+      v_org_a_id, v_cc_a1_id, 'Phase8 Luna', 'Dog', 'Beagle', 'Female', 11.4, NULL, 'Tricolor', NULL, NULL
+    );
+
+    -- Admin sets schedules for Dr. Alpha One on Branch A1 & Branch A2 + 45-min clinic service
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_admin::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_admin::text, true);
+    PERFORM public.upsert_doctor_schedule(
+      v_org_a_id, v_branch_a1_id, v_doc_a1_prof_id,
+      EXTRACT(ISODOW FROM v_p8_date)::SMALLINT, '09:00'::TIME, '13:00'::TIME, 30::SMALLINT, true
+    );
+    PERFORM public.upsert_doctor_schedule(
+      v_org_a_id, v_branch_a2_id, v_doc_a1_prof_id,
+      EXTRACT(ISODOW FROM v_p8_date)::SMALLINT, '09:00'::TIME, '13:00'::TIME, 30::SMALLINT, true
+    );
+    v_p8_svc_res := public.upsert_clinic_service(
+      v_org_a_id, NULL, v_branch_a1_id, 'Comprehensive Wellness 45', 'WELL45',
+      'consultation', 'Extended diagnostic exam', 45, 95.00, true
+    );
+    v_p8_svc_id := (v_p8_svc_res->>'id')::UUID;
+
+    -- 13a. Pending request must NOT reserve slot + service duration mismatch rejected
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
+
+    SELECT count(*) INTO v_p8_slots_before
+    FROM public.get_available_slots(v_org_a_id, v_branch_a1_id, v_doc_a1_prof_id, v_p8_date, v_p8_svc_id);
+
+    -- Duration mismatch (30 min for 45 min service) must fail (22023)
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.request_appointment(
+        v_org_a_id, v_branch_a1_id, v_p8_pet_id, v_doc_a1_prof_id,
+        (v_p8_date::TIMESTAMP + TIME '09:00') AT TIME ZONE 'UTC',
+        (v_p8_date::TIMESTAMP + TIME '09:30') AT TIME ZONE 'UTC',
+        'Duration mismatch test', v_p8_svc_id
+      );
+    EXCEPTION WHEN SQLSTATE '22023' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 13a FAILED: Service duration mismatch was accepted!';
+    END IF;
+
+    -- Valid 45-min request succeeds and leaves slots_after == slots_before
+    v_p8_appt_1 := public.request_appointment(
+      v_org_a_id, v_branch_a1_id, v_p8_pet_id, v_doc_a1_prof_id,
+      (v_p8_date::TIMESTAMP + TIME '09:00') AT TIME ZONE 'UTC',
+      (v_p8_date::TIMESTAMP + TIME '09:45') AT TIME ZONE 'UTC',
+      'Annual physical exam with diagnostics', v_p8_svc_id
+    );
+    SELECT count(*) INTO v_p8_slots_after
+    FROM public.get_available_slots(v_org_a_id, v_branch_a1_id, v_doc_a1_prof_id, v_p8_date, v_p8_svc_id);
+    IF v_p8_slots_after <> v_p8_slots_before THEN
+      RAISE EXCEPTION 'TEST 13b FAILED: Pending request reserved slot (% vs %)!', v_p8_slots_before, v_p8_slots_after;
+    END IF;
+
+    -- Second request overlapping across Branch A2 + an unconfirmed request
+    v_p8_appt_2 := public.request_appointment(
+      v_org_a_id, v_branch_a2_id, v_p8_pet_id, v_doc_a1_prof_id,
+      (v_p8_date::TIMESTAMP + TIME '09:15') AT TIME ZONE 'UTC',
+      (v_p8_date::TIMESTAMP + TIME '09:45') AT TIME ZONE 'UTC',
+      'Cross-branch overlap check', NULL
+    );
+    v_p8_appt_unconf := public.request_appointment(
+      v_org_a_id, v_branch_a1_id, v_p8_pet_id, v_doc_a1_prof_id,
+      (v_p8_date::TIMESTAMP + TIME '11:00') AT TIME ZONE 'UTC',
+      (v_p8_date::TIMESTAMP + TIME '11:30') AT TIME ZONE 'UTC',
+      'Unconfirmed appt for consultation gating check', NULL
+    );
+
+    -- 13b. Confirm appt_1 -> blocks overlapping appt_2 across Branch A2 with 23P01
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_admin::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_admin::text, true);
+    PERFORM public.confirm_appointment(v_p8_appt_1, NULL, NULL, NULL, NULL);
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.confirm_appointment(v_p8_appt_2, NULL, NULL, NULL, NULL);
+    EXCEPTION WHEN SQLSTATE '23P01' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 13c FAILED: Overlapping cross-branch confirmation succeeded!';
+    END IF;
+
+    -- 13c. Consultation requires confirmed/checked_in/completed appointment
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_doc1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_doc1::text, true);
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.create_consultation_from_appointment(v_p8_appt_unconf, 'Premature activation', true);
+    EXCEPTION WHEN SQLSTATE '22023' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 13d FAILED: Consultation created from unconfirmed appointment!';
+    END IF;
+
+    -- Activate consultation from confirmed appointment & verify exact 7-day expiry
+    v_p8_cons_res := public.create_consultation_from_appointment(v_p8_appt_1, 'Confirmed clinical intake', true);
+    v_p8_cons_id := (v_p8_cons_res->>'id')::UUID;
+    SELECT * INTO v_p8_cons_row FROM public.consultations WHERE id = v_p8_cons_id;
+    IF v_p8_cons_row.expires_at IS NULL OR (v_p8_cons_row.expires_at - v_p8_cons_row.activated_at) <> INTERVAL '7 days' THEN
+      RAISE EXCEPTION 'TEST 13e FAILED: Consultation expiry is not exactly 7 days from activated_at!';
+    END IF;
+
+    -- Client cannot extend expiry directly (42501)
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
+    v_err_caught := false;
+    BEGIN
+      UPDATE public.consultations SET expires_at = now() + INTERVAL '30 days' WHERE id = v_p8_cons_id;
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 13f FAILED: Client extended consultation expires_at directly!';
+    END IF;
+
+    -- 13d. Chat messaging, blob URL rejection, clinical records + amendments + prescriptions + vaccinations
+    SELECT id INTO v_p8_conv_id FROM public.chat_conversations WHERE consultation_id = v_p8_cons_id;
+    v_p8_msg_res := public.send_chat_message(v_p8_conv_id, 'text', 'Initial owner update on Luna', '{}'::uuid[]);
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.register_attachment(
+        v_org_a_id, 'chat_message', v_p8_cons_id,
+        'blob:http://localhost:3000/ephemeral-file', 'image/png', 1024, 'bad.png'
+      );
+    EXCEPTION WHEN SQLSTATE '22023' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 13g FAILED: Ephemeral blob: attachment URL was accepted!';
+    END IF;
+
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_doc1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_doc1::text, true);
+    v_p8_rec_orig := public.add_medical_record(
+      v_org_a_id, v_p8_pet_id, v_p8_cons_id, 'clinical_note', 'Mild seasonal dermatitis', 'Initial observation and skin check.'
+    );
+    v_p8_rec_amend := public.amend_medical_record(
+      v_p8_rec_orig, 'Mild seasonal allergic dermatitis', 'Addendum confirming allergen trigger; original preserved.'
+    );
+    SELECT diagnosis INTO v_p8_orig_diag FROM public.medical_records WHERE id = v_p8_rec_orig;
+    IF v_p8_orig_diag <> 'Mild seasonal dermatitis' THEN
+      RAISE EXCEPTION 'TEST 13h FAILED: Amending medical record overwrote original diagnosis!';
+    END IF;
+
+    v_p8_rx_id := public.issue_prescription(
+      v_org_a_id, v_p8_pet_id, v_p8_cons_id, v_p8_appt_1,
+      'Seasonal dermatitis', 'Administer with food', NULL,
+      '[{"medicine_name":"Apoquel","dosage":"5.4 mg","frequency":"Once daily","duration":"14 days","instructions":"After meal"}]'::jsonb
+    );
+    v_p8_vax_id := public.record_vaccination(
+      v_org_a_id, v_p8_pet_id, 'DHPPi-L Booster', CURRENT_DATE, (CURRENT_DATE + 365), 'BATCH-88', 'Annual immunization'
+    );
+
+    -- 13e. Trusted expiry transition + post-expiry lock + participant-only historical read
+    RESET ROLE;
+    UPDATE public.consultations
+    SET activated_at = now() - INTERVAL '8 days',
+        expires_at = now() - INTERVAL '1 day'
+    WHERE id = v_p8_cons_id;
+
+    SET LOCAL ROLE authenticated;
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
+    v_p8_expired_cnt := public.expire_due_consultations(v_org_a_id, v_p8_cons_id);
+    IF v_p8_expired_cnt <> 1 THEN
+      RAISE EXCEPTION 'TEST 13i FAILED: expire_due_consultations transitioned % rows (expected 1)!', v_p8_expired_cnt;
+    END IF;
+
+    -- Sending new message or chat attachment after expiry must fail (22023)
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.send_chat_message(v_p8_conv_id, 'text', 'Late message after 7d', '{}'::uuid[]);
+    EXCEPTION WHEN SQLSTATE '22023' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 13j FAILED: Message send succeeded after 7-day expiry!';
+    END IF;
+
+    v_err_caught := false;
+    BEGIN
+      PERFORM public.register_attachment(
+        v_org_a_id, 'chat_message', v_p8_cons_id,
+        v_org_a_id::text || '/chat_message/' || v_p8_cons_id::text || '/late.pdf',
+        'application/pdf', 1024, 'late.pdf'
+      );
+    EXCEPTION WHEN SQLSTATE '22023' THEN
+      v_err_caught := true;
+    END;
+    IF NOT v_err_caught THEN
+      RAISE EXCEPTION 'TEST 13k FAILED: Chat attachment registered after 7-day expiry!';
+    END IF;
+
+    -- Historical chat messages remain readable to client & treating doctor, blocked for Admin & Platform Owner
+    SELECT count(*) INTO v_count FROM public.chat_messages WHERE conversation_id = v_p8_conv_id;
+    IF v_count < 1 THEN
+      RAISE EXCEPTION 'TEST 13l FAILED: Client lost historical read access after expiry!';
+    END IF;
+
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_doc1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_doc1::text, true);
+    SELECT count(*) INTO v_count FROM public.chat_messages WHERE conversation_id = v_p8_conv_id;
+    IF v_count < 1 THEN
+      RAISE EXCEPTION 'TEST 13m FAILED: Treating doctor lost historical read access after expiry!';
+    END IF;
+
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_admin::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_admin::text, true);
+    SELECT count(*) INTO v_count FROM public.chat_messages WHERE conversation_id = v_p8_conv_id;
+    IF v_count <> 0 THEN
+      RAISE EXCEPTION 'TEST 13n FAILED: Org Admin read expired chat history!';
+    END IF;
+
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_platform_admin::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_platform_admin::text, true);
+    SELECT count(*) INTO v_count FROM public.chat_messages WHERE conversation_id = v_p8_conv_id;
+    IF v_count <> 0 THEN
+      RAISE EXCEPTION 'TEST 13o FAILED: Platform Owner read expired chat history!';
+    END IF;
+
+    -- Verify notification generation for client across workflows
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
+    SELECT count(*) INTO v_p8_notif_cnt
+    FROM public.notifications
+    WHERE organization_id = v_org_a_id AND user_id = v_org_a_client1;
+    IF v_p8_notif_cnt < 5 THEN
+      RAISE EXCEPTION 'TEST 13p FAILED: Expected workflow notifications for client, got %!', v_p8_notif_cnt;
+    END IF;
+  END;
+  RAISE NOTICE 'TEST 13 PASSED: Phase 8 core business workflows, concurrency locks, 7-day chat, clinical amendments & notifications verified';
+
   RAISE NOTICE '================================================================';
   RAISE NOTICE 'ALL MULTI-TENANT RLS & HARDENED RPC ASSERTIONS PASSED!';
   RAISE NOTICE '================================================================';

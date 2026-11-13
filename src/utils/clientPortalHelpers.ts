@@ -75,6 +75,21 @@ export function validateClientProfile(input: {
   return null;
 }
 
+export function isEphemeralBlobOrDataUrl(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  return /^blob:/i.test(trimmed) || /^data:/i.test(trimmed);
+}
+
+export function sanitizeClinicalUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed || isEphemeralBlobOrDataUrl(trimmed) || trimmed.includes('..')) {
+    return null;
+  }
+  return trimmed;
+}
+
 export function validateAppointmentRequest(input: {
   organization_id: string;
   branch_id: string;
@@ -83,6 +98,8 @@ export function validateAppointmentRequest(input: {
   requested_start: string;
   requested_end: string;
   reason: string;
+  service_id?: string | null;
+  expected_service_duration_minutes?: number | null;
 }): string | null {
   if (!input.organization_id) return 'Active organization is required.';
   if (!input.branch_id) return 'Please select a clinic branch.';
@@ -95,6 +112,17 @@ export function validateAppointmentRequest(input: {
   }
   if (end.getTime() <= start.getTime()) {
     return 'Appointment end time must be after start time.';
+  }
+  const durationMinutes = Math.round((end.getTime() - start.getTime()) / 60000);
+  if (durationMinutes < 5 || durationMinutes > 480) {
+    return 'Appointment duration must be between 5 and 480 minutes.';
+  }
+  if (
+    input.service_id &&
+    input.expected_service_duration_minutes &&
+    durationMinutes !== input.expected_service_duration_minutes
+  ) {
+    return `Selected time slot (${durationMinutes} min) must match the service duration (${input.expected_service_duration_minutes} min).`;
   }
   if (input.reason.trim().length < 5) {
     return 'Please provide a brief clinical reason (at least 5 characters).';

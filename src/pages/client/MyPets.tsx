@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useClientWorkspace } from '../../hooks/useClientWorkspace';
 import { useApp } from '../../context/AppContext';
@@ -10,10 +10,16 @@ import {
   ALLOWED_PET_SPECIES,
   validatePetForm,
 } from '../../utils/clientPortalHelpers';
+import {
+  compareStrings,
+  paginateItems,
+  sortItems,
+} from '../../utils/listManagementHelpers';
 import { PageHeader } from '../../components/common/PageHeader';
 import { Modal } from '../../components/common/Modal';
 import { EmptyState } from '../../components/common/EmptyState';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { Pagination } from '../../components/common/Pagination';
 import {
   AlertTriangle,
   Archive,
@@ -40,6 +46,9 @@ export const MyPets: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [speciesFilter, setSpeciesFilter] = useState('All');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingPet, setEditingPet] = useState<ClientPet | null>(null);
@@ -191,16 +200,28 @@ export const MyPets: React.FC = () => {
     }
   };
 
-  const filteredPets = pets.filter((pet) => {
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, speciesFilter, sortOrder, pageSize]);
+
+  const filteredPets = useMemo(() => {
     const q = searchQuery.toLowerCase();
-    const matchesSearch =
-      pet.name.toLowerCase().includes(q) ||
-      pet.breed.toLowerCase().includes(q) ||
-      pet.species.toLowerCase().includes(q);
-    const matchesSpecies =
-      speciesFilter === 'All' || pet.species === speciesFilter;
-    return matchesSearch && matchesSpecies;
-  });
+    const filtered = pets.filter((pet) => {
+      const matchesSearch =
+        pet.name.toLowerCase().includes(q) ||
+        pet.breed.toLowerCase().includes(q) ||
+        pet.species.toLowerCase().includes(q);
+      const matchesSpecies =
+        speciesFilter === 'All' || pet.species === speciesFilter;
+      return matchesSearch && matchesSpecies;
+    });
+    return sortItems(filtered, (a, b) => compareStrings(a.name, b.name), sortOrder);
+  }, [pets, searchQuery, speciesFilter, sortOrder]);
+
+  const pagedPets = useMemo(
+    () => paginateItems(filteredPets, page, pageSize),
+    [filteredPets, page, pageSize]
+  );
 
   if (!workspace || loading) {
     return (
@@ -241,26 +262,37 @@ export const MyPets: React.FC = () => {
       )}
 
       {/* Search & Filter Bar */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search pets by name, breed, or species..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-          />
+      <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-xs">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
+          <div className="relative w-full sm:w-80">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder="Search pets by name, breed, or species..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+            />
+          </div>
+          <select
+            value={sortOrder}
+            onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+            aria-label="Sort pets"
+            className="px-3 py-2 text-xs rounded-lg border border-slate-200 bg-slate-50 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+          >
+            <option value="asc">Name (A–Z)</option>
+            <option value="desc">Name (Z–A)</option>
+          </select>
         </div>
 
-        <div className="flex items-center gap-1 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+        <div className="flex items-center gap-1 overflow-x-auto w-full lg:w-auto pb-1 lg:pb-0">
           <Filter className="w-3.5 h-3.5 text-slate-400 mr-1 hidden sm:inline" />
           {['All', ...ALLOWED_PET_SPECIES].map((cat) => (
             <button
               key={cat}
               type="button"
               onClick={() => setSpeciesFilter(cat)}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${
                 speciesFilter === cat
                   ? 'bg-teal-700 text-white'
                   : 'text-slate-600 hover:bg-slate-100'
@@ -288,8 +320,9 @@ export const MyPets: React.FC = () => {
           }}
         />
       ) : (
+        <div className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredPets.map((pet) => (
+          {pagedPets.items.map((pet) => (
             <div
               key={pet.id}
               onClick={() => navigate(`${clientBasePath}/pets/${pet.id}`)}
@@ -381,6 +414,24 @@ export const MyPets: React.FC = () => {
               </div>
             </div>
           ))}
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+          <Pagination
+            currentPage={pagedPets.currentPage}
+            totalPages={pagedPets.totalPages}
+            totalItems={pagedPets.totalItems}
+            startIndex={pagedPets.startIndex}
+            endIndex={pagedPets.endIndex}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(next) => {
+              setPageSize(next);
+              setPage(1);
+            }}
+            pageSizeOptions={[12, 24, 48]}
+            itemLabel="pets"
+          />
+        </div>
         </div>
       )}
 

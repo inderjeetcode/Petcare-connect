@@ -22,6 +22,7 @@ import {
   Clock,
   AlertCircle,
   ShieldCheck,
+  Check,
   CheckCheck,
   Search,
   MessageSquare,
@@ -74,6 +75,7 @@ export const ClientChat: React.FC = () => {
     setLoadingList(true);
     setListError(null);
     try {
+      await clientPortalService.expireDueConsultations(workspace.organizationId).catch(() => 0);
       const list = await clientPortalService.getConsultations(workspace.organizationId);
       setConsultations(list);
     } catch (err: any) {
@@ -145,12 +147,12 @@ export const ClientChat: React.FC = () => {
     void loadConversationAndMessages();
   }, [loadConversationAndMessages]);
 
-  // Realtime subscription to chat_messages
+  // Realtime subscription to chat_messages & consultation status changes
   useEffect(() => {
     if (!conversation?.id || !workspace || !currentConsultation) {
       return;
     }
-    const unsubscribe = clientPortalService.subscribeToConversationMessages(
+    const unsubMessages = clientPortalService.subscribeToConversationMessages(
       conversation.id,
       () => {
         void clientPortalService
@@ -166,8 +168,38 @@ export const ClientChat: React.FC = () => {
           .catch(() => {});
       }
     );
-    return unsubscribe;
-  }, [conversation?.id, workspace, currentConsultation]);
+    const unsubConsultation = clientPortalService.subscribeToConsultationChanges(
+      currentConsultation.id,
+      () => {
+        void loadConsultations();
+      }
+    );
+    return () => {
+      unsubMessages();
+      unsubConsultation();
+    };
+  }, [conversation?.id, workspace, currentConsultation, loadConsultations]);
+
+  // Automatically synchronize DB consultation_status to 'expired' when active window passes expires_at
+  useEffect(() => {
+    if (
+      !workspace ||
+      !currentConsultation ||
+      currentConsultation.consultation_status !== 'active' ||
+      !currentConsultation.expires_at
+    ) {
+      return;
+    }
+    const expiresMs = new Date(currentConsultation.expires_at).getTime();
+    if (!Number.isNaN(expiresMs) && nowMs >= expiresMs) {
+      void clientPortalService
+        .expireDueConsultations(workspace.organizationId, currentConsultation.id)
+        .then((count) => {
+          if (count > 0) void loadConsultations();
+        })
+        .catch(() => {});
+    }
+  }, [workspace, currentConsultation, nowMs, loadConsultations]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -497,7 +529,16 @@ export const ClientChat: React.FC = () => {
                             minute: '2-digit',
                           })}
                         </span>
-                        {isMe && <CheckCheck className="w-3.5 h-3.5 text-teal-300" />}
+                        {isMe &&
+                          (msg.read_at ? (
+                            <span title={`Read at ${new Date(msg.read_at).toLocaleString()}`}>
+                              <CheckCheck className="w-3.5 h-3.5 text-teal-200" />
+                            </span>
+                          ) : (
+                            <span title="Sent (unread)">
+                              <Check className="w-3.5 h-3.5 text-teal-300/70" />
+                            </span>
+                          ))}
                       </div>
                     </div>
                   </div>

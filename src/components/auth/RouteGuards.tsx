@@ -30,7 +30,7 @@ const FullscreenLoading: React.FC<{ message?: string }> = ({
 export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({
   children,
 }) => {
-  const { authStatus, isContextLoading, myContext } = useAuth();
+  const { authStatus, isContextLoading, myContext, signOut } = useAuth();
   const location = useLocation();
 
   if (authStatus === 'loading' || (authStatus === 'authenticated' && isContextLoading && !myContext)) {
@@ -51,6 +51,31 @@ export const RequireAuth: React.FC<{ children?: React.ReactNode }> = ({
           expired: authStatus === 'session_expired',
         }}
       />
+    );
+  }
+
+  if (myContext?.profile?.platform_status === 'suspended') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-rose-200 p-8 shadow-xs text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl mx-auto bg-rose-50 text-rose-700 border border-rose-200 flex items-center justify-center">
+            <ShieldAlert className="w-6 h-6" />
+          </div>
+          <h1 className="text-lg font-bold text-slate-900">Account Suspended</h1>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Your Pet Connect platform account has been placed on administrative hold. Contact Platform Governance support if you believe this is in error.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void signOut();
+            }}
+            className="px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
     );
   }
 

@@ -92,9 +92,14 @@ export interface ClientAppointment {
   clinic_client_id: string;
   pet_id: string;
   doctor_profile_id: string;
+  service_id?: string | null;
+  service_name?: string | null;
+  service_duration_minutes?: number | null;
   requested_start: string;
   requested_end: string;
   scheduled_range: string | null;
+  scheduled_start?: string | null;
+  scheduled_end?: string | null;
   status: AppointmentStatus;
   reason: string;
   decline_reason: string | null;
