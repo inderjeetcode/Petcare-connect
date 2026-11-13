@@ -188,8 +188,8 @@ BEGIN
       ON a.service_id = cs.id
       AND a.organization_id = p_organization_id
       AND (p_branch_id IS NULL OR a.branch_id = p_branch_id)
-      AND (p_from IS NULL OR coalesce(a.scheduled_start, a.requested_start) >= p_from)
-      AND (p_to IS NULL OR coalesce(a.scheduled_start, a.requested_start) <= p_to)
+      AND (p_from IS NULL OR coalesce(lower(a.scheduled_range), a.requested_start) >= p_from)
+      AND (p_to IS NULL OR coalesce(lower(a.scheduled_range), a.requested_start) <= p_to)
     WHERE cs.organization_id = p_organization_id
       AND (p_branch_id IS NULL OR cs.branch_id IS NULL OR cs.branch_id = p_branch_id)
     GROUP BY cs.id

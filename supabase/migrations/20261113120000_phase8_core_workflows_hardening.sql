@@ -1750,11 +1750,15 @@ AS $$
 DECLARE
   v_uid UUID := auth.uid();
   v_pet public.pets;
+  v_new_weight NUMERIC;
+  v_new_dob DATE;
   v_avatar TEXT := NULLIF(trim(COALESCE(p_updates->>'avatar_url', '')), '');
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'Unauthorized' USING ERRCODE = '28000'; END IF;
   SELECT * INTO v_pet FROM public.pets WHERE id = p_pet_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'Pet not found' USING ERRCODE = 'P0002'; END IF;
+  IF NOT FOUND OR v_pet.archived_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Pet not found or archived' USING ERRCODE = 'P0002';
+  END IF;
 
   IF NOT (
     app.is_pet_guardian(v_pet.organization_id, p_pet_id)
@@ -1767,16 +1771,33 @@ BEGIN
     RAISE EXCEPTION 'Ephemeral blob or data URLs cannot be stored as pet avatars' USING ERRCODE = '22023';
   END IF;
 
+  IF p_updates ? 'weight' AND NULLIF(trim(COALESCE(p_updates->>'weight', '')), '') IS NOT NULL THEN
+    v_new_weight := (p_updates->>'weight')::NUMERIC;
+    IF v_new_weight <= 0 THEN
+      RAISE EXCEPTION 'Pet weight must be positive' USING ERRCODE = '22023';
+    END IF;
+  ELSE
+    v_new_weight := v_pet.weight;
+  END IF;
+
+  IF p_updates ? 'date_of_birth' THEN
+    v_new_dob := NULLIF(trim(COALESCE(p_updates->>'date_of_birth', '')), '')::DATE;
+  ELSE
+    v_new_dob := v_pet.date_of_birth;
+  END IF;
+
   UPDATE public.pets
   SET name = COALESCE(NULLIF(trim(p_updates->>'name'), ''), name),
       species = COALESCE(NULLIF(trim(p_updates->>'species'), ''), species),
       breed = COALESCE(NULLIF(trim(p_updates->>'breed'), ''), breed),
       gender = COALESCE(NULLIF(trim(p_updates->>'gender'), ''), gender),
-      weight = COALESCE((p_updates->>'weight')::NUMERIC, weight),
-      color = COALESCE(p_updates->>'color', color),
-      allergies = COALESCE(p_updates->>'allergies', allergies),
-      medical_notes = COALESCE(p_updates->>'medical_notes', medical_notes),
-      avatar_url = COALESCE(v_avatar, avatar_url)
+      date_of_birth = v_new_dob,
+      weight = v_new_weight,
+      color = CASE WHEN p_updates ? 'color' THEN NULLIF(trim(COALESCE(p_updates->>'color', '')), '') ELSE color END,
+      avatar_url = CASE WHEN p_updates ? 'avatar_url' THEN v_avatar ELSE avatar_url END,
+      allergies = CASE WHEN p_updates ? 'allergies' THEN NULLIF(trim(COALESCE(p_updates->>'allergies', '')), '') ELSE allergies END,
+      medical_notes = CASE WHEN p_updates ? 'medical_notes' THEN NULLIF(trim(COALESCE(p_updates->>'medical_notes', '')), '') ELSE medical_notes END,
+      updated_at = timezone('utc'::text, now())
   WHERE id = p_pet_id;
 
   PERFORM app.write_audit_log(
