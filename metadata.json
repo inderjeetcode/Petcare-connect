@@ -1,0 +1,6 @@
+{
+  "name": "Pet Connect",
+  "description": "Digital veterinary healthcare platform connecting pet owners with veterinary doctors and clinic administrators with consultation workflows, medical records, digital prescriptions, and 7-day expiring chat.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
