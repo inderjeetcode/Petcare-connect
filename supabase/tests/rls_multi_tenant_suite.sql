@@ -760,11 +760,11 @@ BEGIN
   PERFORM public.cancel_appointment(v_appt_a1_id, 'Test cleanup');
   PERFORM public.cancel_appointment(v_appt_a1_clash_id, 'Test cleanup');
   PERFORM public.cancel_appointment(v_appt_a2_id, 'Test cleanup');
-  v_err_caught := false;
+      v_err_caught := false;
   BEGIN
     PERFORM public.archive_pet(v_pet_a1_id, 'Testing pending consultation lock');
   EXCEPTION WHEN SQLSTATE '22023' THEN
-    v_err_caught := true;
+  v_err_caught := true;
   END;
 
   IF NOT v_err_caught THEN
@@ -1304,8 +1304,182 @@ BEGIN
       RAISE EXCEPTION 'TEST 14m FAILED: Repeated bootstrap execution succeeded!';
     END IF;
   END;
-  RAISE NOTICE 'TEST 14 PASSED: Single active Platform Owner constraint, disabled grant RPC & controlled bootstrap verified';
 
+  RAISE NOTICE 'TEST 14 PASSED: Single active Platform Owner constraint, disabled grant RPC & controlled bootstrap verified';
+    -- ---------------------------------------------------------------------------
+  -- TEST 15: PROFILE PRIVILEGE & PLATFORM OWNER USER LIFECYCLE
+  -- ---------------------------------------------------------------------------
+  DECLARE
+    v_test_owner_uid UUID;
+    v_test_target_uid UUID := v_org_a_owner;
+    v_test_status TEXT;
+    v_test_error BOOLEAN := false;
+    v_rows INTEGER;
+  BEGIN
+    -- 15a. Safe profile fields must be editable.
+    IF NOT has_column_privilege('authenticated', 'public.profiles', 'full_name', 'UPDATE')
+       OR NOT has_column_privilege('authenticated', 'public.profiles', 'phone', 'UPDATE')
+       OR NOT has_column_privilege('authenticated', 'public.profiles', 'avatar_url', 'UPDATE') THEN
+      RAISE EXCEPTION 'TEST 15a FAILED: Safe profile UPDATE privileges missing!';
+    END IF;
+
+    -- 15b. Sensitive profile fields must not be editable directly.
+    IF has_column_privilege('authenticated', 'public.profiles', 'id', 'UPDATE')
+       OR has_column_privilege('authenticated', 'public.profiles', 'email', 'UPDATE')
+       OR has_column_privilege('authenticated', 'public.profiles', 'created_at', 'UPDATE')
+       OR has_column_privilege('authenticated', 'public.profiles', 'updated_at', 'UPDATE')
+       OR has_column_privilege('authenticated', 'public.profiles', 'platform_status', 'UPDATE')
+       OR has_column_privilege('authenticated', 'public.profiles', 'platform_suspended_at', 'UPDATE')
+       OR has_column_privilege('authenticated', 'public.profiles', 'platform_suspension_reason', 'UPDATE') THEN
+      RAISE EXCEPTION 'TEST 15b FAILED: Sensitive profile UPDATE privilege still exists!';
+    END IF;
+
+    -- Find the synthetic active Platform Owner created by Test 14.
+    SELECT user_id INTO v_test_owner_uid
+    FROM public.platform_admins
+    WHERE is_active = true;
+
+    IF v_test_owner_uid IS NULL THEN
+      RAISE EXCEPTION 'TEST 15 FAILED: No synthetic active Platform Owner found!';
+    END IF;
+
+    -- Confirm target profile is active.
+    SELECT platform_status INTO v_test_status
+    FROM public.profiles
+    WHERE id = v_test_target_uid;
+
+    IF NOT FOUND OR COALESCE(v_test_status, 'active') <> 'active' THEN
+      RAISE EXCEPTION 'TEST 15 FAILED: Target profile missing or not active!';
+    END IF;
+
+    -- 15c. Authenticated user can update an allowed field.
+    SET LOCAL ROLE authenticated;
+
+    PERFORM set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text,
+      true
+    );
+    PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+    UPDATE public.profiles
+    SET full_name = COALESCE(full_name, '') || ' [privilege-test]'
+    WHERE id = v_org_a_client1;
+
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+
+    IF v_rows <> 1 THEN
+      RAISE EXCEPTION 'TEST 15c FAILED: Own safe profile update failed!';
+    END IF;
+
+    -- 15d. Direct email update must be blocked.
+    v_test_error := false;
+
+    BEGIN
+      UPDATE public.profiles
+      SET email = 'unauthorized-change@example.com'
+      WHERE id = v_org_a_client1;
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_test_error := true;
+    END;
+
+    IF NOT v_test_error THEN
+      RAISE EXCEPTION 'TEST 15d FAILED: Direct email update was allowed!';
+    END IF;
+
+    -- 15e. Direct platform status update must be blocked.
+    v_test_error := false;
+
+    BEGIN
+      UPDATE public.profiles
+      SET platform_status = 'suspended'
+      WHERE id = v_org_a_client1;
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_test_error := true;
+    END;
+
+    IF NOT v_test_error THEN
+      RAISE EXCEPTION 'TEST 15e FAILED: Direct platform_status update was allowed!';
+    END IF;
+
+    -- 15f. Normal user must not suspend another user.
+    v_test_error := false;
+
+    BEGIN
+      PERFORM public.platform_suspend_user(
+        v_test_target_uid,
+        'Unauthorized suspension attempt'
+      );
+    EXCEPTION WHEN SQLSTATE '42501' THEN
+      v_test_error := true;
+    END;
+
+    IF NOT v_test_error THEN
+      RAISE EXCEPTION 'TEST 15f FAILED: Normal user executed suspension RPC!';
+    END IF;
+
+    -- 15g. Platform Owner suspends the target.
+    PERFORM set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_test_owner_uid::text, 'role', 'authenticated')::text,
+      true
+    );
+    PERFORM set_config('request.jwt.claim.sub', v_test_owner_uid::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+    PERFORM public.platform_suspend_user(
+      v_test_target_uid,
+      'Automated security regression test'
+    );
+
+    RESET ROLE;
+
+    SELECT platform_status INTO v_test_status
+    FROM public.profiles
+    WHERE id = v_test_target_uid;
+
+    IF v_test_status <> 'suspended' THEN
+      RAISE EXCEPTION 'TEST 15g FAILED: Suspension RPC failed!';
+    END IF;
+
+    -- 15h. Platform Owner reactivates the target.
+    SET LOCAL ROLE authenticated;
+
+    PERFORM set_config(
+      'request.jwt.claims',
+      json_build_object('sub', v_test_owner_uid::text, 'role', 'authenticated')::text,
+      true
+    );
+    PERFORM set_config('request.jwt.claim.sub', v_test_owner_uid::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+
+    PERFORM public.platform_reactivate_user(v_test_target_uid);
+
+    RESET ROLE;
+
+    SELECT platform_status INTO v_test_status
+    FROM public.profiles
+    WHERE id = v_test_target_uid;
+
+    IF COALESCE(v_test_status, 'active') <> 'active' THEN
+      RAISE EXCEPTION 'TEST 15h FAILED: Reactivation RPC failed!';
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+      FROM public.profiles
+      WHERE id = v_test_target_uid
+        AND (
+          platform_suspended_at IS NOT NULL
+          OR platform_suspension_reason IS NOT NULL
+        )
+    ) THEN
+      RAISE EXCEPTION 'TEST 15h FAILED: Suspension metadata was not cleared!';
+    END IF;
+  END;
+
+  RAISE NOTICE 'TEST 15 PASSED: Profile privileges and Platform Owner lifecycle RPCs verified';
   RAISE NOTICE '================================================================';
   RAISE NOTICE 'ALL MULTI-TENANT RLS & HARDENED RPC ASSERTIONS PASSED!';
   RAISE NOTICE '================================================================';
@@ -1314,7 +1488,7 @@ END $$;
 
 SELECT ok(
   true,
-  'All 14 multi-tenant RLS and hardened RPC test groups passed'
+  'All 15 multi-tenant RLS and hardened RPC test groups passed'
 );
 
 SELECT * FROM finish();
