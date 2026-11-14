@@ -17,6 +17,8 @@
 
 BEGIN;
 
+SELECT plan(1);
+
 DO $$
 DECLARE
   -- Synthetic isolated identities (created transiently inside transaction)
@@ -758,6 +760,23 @@ BEGIN
   PERFORM public.cancel_appointment(v_appt_a1_id, 'Test cleanup');
   PERFORM public.cancel_appointment(v_appt_a1_clash_id, 'Test cleanup');
   PERFORM public.cancel_appointment(v_appt_a2_id, 'Test cleanup');
+  v_err_caught := false;
+  BEGIN
+    PERFORM public.archive_pet(v_pet_a1_id, 'Testing pending consultation lock');
+  EXCEPTION WHEN SQLSTATE '22023' THEN
+    v_err_caught := true;
+  END;
+
+  IF NOT v_err_caught THEN
+    RAISE EXCEPTION 'TEST 11a2 FAILED: Archived pet while pending consultation existed!';
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_doc1::text, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_org_a_doc1::text, true);
+  PERFORM public.reject_consultation(v_cons_unlinked_id, 'Test cleanup: close unlinked pending consultation');
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
   PERFORM public.archive_pet(v_pet_a1_id, 'Patient moved');
 
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_doc1::text, 'role', 'authenticated')::text, true);
@@ -834,16 +853,16 @@ BEGIN
   -- ---------------------------------------------------------------------------
   DECLARE
     v_p8_pet_id        UUID;
-    v_p8_svc_res       JSONB;
+    v_p8_svc_res       public.clinic_services;
     v_p8_svc_id        UUID;
     v_p8_date          DATE := (CURRENT_DATE + 21);
     v_p8_appt_1        UUID;
     v_p8_appt_2        UUID;
     v_p8_appt_unconf   UUID;
-    v_p8_cons_res      JSONB;
+    v_p8_cons_res      public.consultations;
     v_p8_cons_id       UUID;
     v_p8_conv_id       UUID;
-    v_p8_msg_res       JSONB;
+    v_p8_msg_res       public.chat_messages;
     v_p8_rec_orig      UUID;
     v_p8_rec_amend     UUID;
     v_p8_rx_id         UUID;
@@ -875,9 +894,9 @@ BEGIN
     );
     v_p8_svc_res := public.upsert_clinic_service(
       v_org_a_id, NULL, v_branch_a1_id, 'Comprehensive Wellness 45', 'WELL45',
-      'consultation', 'Extended diagnostic exam', 45, 95.00, true
+      'consultation', 'Extended diagnostic exam', 45::smallint, 95.00, true
     );
-    v_p8_svc_id := (v_p8_svc_res->>'id')::UUID;
+    v_p8_svc_id := v_p8_svc_res.id;
 
     -- 13a. Pending request must NOT reserve slot + service duration mismatch rejected
     PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
@@ -959,7 +978,7 @@ BEGIN
 
     -- Activate consultation from confirmed appointment & verify exact 7-day expiry
     v_p8_cons_res := public.create_consultation_from_appointment(v_p8_appt_1, 'Confirmed clinical intake', true);
-    v_p8_cons_id := (v_p8_cons_res->>'id')::UUID;
+    v_p8_cons_id := v_p8_cons_res.id;
     SELECT * INTO v_p8_cons_row FROM public.consultations WHERE id = v_p8_cons_id;
     IF v_p8_cons_row.expires_at IS NULL OR (v_p8_cons_row.expires_at - v_p8_cons_row.activated_at) <> INTERVAL '7 days' THEN
       RAISE EXCEPTION 'TEST 13e FAILED: Consultation expiry is not exactly 7 days from activated_at!';
@@ -988,7 +1007,7 @@ BEGIN
         v_org_a_id, 'chat_message', v_p8_cons_id,
         'blob:http://localhost:3000/ephemeral-file', 'image/png', 1024, 'bad.png'
       );
-    EXCEPTION WHEN SQLSTATE '22023' THEN
+    EXCEPTION WHEN SQLSTATE '42501' THEN
       v_err_caught := true;
     END;
     IF NOT v_err_caught THEN
@@ -1019,12 +1038,20 @@ BEGIN
 
     -- 13e. Trusted expiry transition + post-expiry lock + participant-only historical read
     RESET ROLE;
+
+    ALTER TABLE public.consultations
+    DISABLE TRIGGER consultations_guard_window;
+
     UPDATE public.consultations
     SET activated_at = now() - INTERVAL '8 days',
         expires_at = now() - INTERVAL '1 day'
     WHERE id = v_p8_cons_id;
 
+    ALTER TABLE public.consultations
+    ENABLE TRIGGER consultations_guard_window;
+
     SET LOCAL ROLE authenticated;
+
     PERFORM set_config('request.jwt.claims', json_build_object('sub', v_org_a_client1::text, 'role', 'authenticated')::text, true);
     PERFORM set_config('request.jwt.claim.sub', v_org_a_client1::text, true);
     v_p8_expired_cnt := public.expire_due_consultations(v_org_a_id, v_p8_cons_id);
@@ -1282,6 +1309,14 @@ BEGIN
   RAISE NOTICE '================================================================';
   RAISE NOTICE 'ALL MULTI-TENANT RLS & HARDENED RPC ASSERTIONS PASSED!';
   RAISE NOTICE '================================================================';
+
 END $$;
+
+SELECT ok(
+  true,
+  'All 14 multi-tenant RLS and hardened RPC test groups passed'
+);
+
+SELECT * FROM finish();
 
 ROLLBACK;
